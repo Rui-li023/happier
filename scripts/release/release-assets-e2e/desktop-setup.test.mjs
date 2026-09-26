@@ -5,7 +5,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { resolveChannelForCliVersion, stageCliReleaseAssets } from './desktop-setup-artifacts.mjs';
+import { resolveChannelForCliVersion, resolvePublishedCliTag, stageCliReleaseAssets } from './desktop-setup-artifacts.mjs';
 import { planPromptResponse, runHsetupTask } from './desktop-setup-driver.mjs';
 import { evaluateFreshSetup, evaluateUpgrade } from './desktop-setup.mjs';
 
@@ -182,4 +182,24 @@ test('upgrade fails when the service keeps running the previous CLI (stale daemo
   newMachine.finalStatus.auth.machineId = 'm2';
   newMachine.finalProbe.machineId = 'm2';
   assert.ok(evaluateUpgrade(newMachine).some((entry) => entry.check === 'still the same machine' && !entry.pass));
+});
+
+test('a desktop-only release pins the rolling channel CLI once to its immutable tag', async () => {
+  // GitHub's release API is the network boundary; the real asset parsing runs beneath it.
+  const requested = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requested.push(String(url));
+    const assets = String(url).endsWith('/cli-stable')
+      ? [{ name: 'happier-v0.2.13-linux-x64.tar.gz' }, { name: 'checksums-happier-v0.2.13.txt' }, { name: 'checksums-happier-v0.2.13.txt.minisig' }]
+      : [{ name: 'README.md' }];
+    return new Response(JSON.stringify({ assets }), { status: 200 });
+  };
+  try {
+    assert.equal(await resolvePublishedCliTag({ repo: 'o/r', channel: 'stable' }), 'cli-v0.2.13');
+    assert.deepEqual(requested, ['https://api.github.com/repos/o/r/releases/tags/cli-stable']);
+    await assert.rejects(resolvePublishedCliTag({ repo: 'o/r', channel: 'preview' }), /could not resolve the published cli-preview/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

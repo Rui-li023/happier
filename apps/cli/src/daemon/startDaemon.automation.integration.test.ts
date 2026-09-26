@@ -229,7 +229,7 @@ const harness = vi.hoisted(() => {
     }),
     connect: vi.fn((params?: { onConnect?: () => void | Promise<void> }) => {
       // Simulate a reconnect so we can assert automation assignment refresh isn't
-      // blocked after the one-time metadata refresh.
+      // blocked after the per-connection metadata refresh.
       void params?.onConnect?.();
       void params?.onConnect?.();
     }),
@@ -1618,7 +1618,7 @@ describe('startDaemon automation wiring (integration)', () => {
       );
       expect(harness.apiMachine.setRPCHandlers).toHaveBeenCalledTimes(1);
       expect(harness.apiMachine.connect).toHaveBeenCalledTimes(1);
-      expect(harness.apiMachine.updateMachineMetadata).toHaveBeenCalledTimes(1);
+      expect(harness.apiMachine.updateMachineMetadata).toHaveBeenCalledTimes(2);
       expect(harness.automationWorkerRefreshAssignments).toHaveBeenCalledTimes(2);
       await waitForCondition(
         () => harness.automationWorkerStop.mock.calls.length >= 1,

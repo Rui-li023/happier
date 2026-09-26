@@ -33,6 +33,8 @@ test('extracts and decompresses the bundled hsetup resource from a .deb', () => 
     assert.equal(extracted.resource, 'usr/lib/Happier/binaries/hsetup-x86_64-unknown-linux-gnu.gz');
     assert.equal(readFileSync(outFile, 'utf8'), HSETUP);
     assert.equal(extracted.hsetupSha256, createHash('sha256').update(HSETUP).digest('hex'));
+    // The packaged resource's own size: the app names its materialized copy after it.
+    assert.equal(extracted.resourceBytes, gzipSync(Buffer.from(HSETUP)).length);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

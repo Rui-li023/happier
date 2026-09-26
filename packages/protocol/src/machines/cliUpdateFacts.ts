@@ -17,14 +17,28 @@ const NonEmptyString = z.string().trim().min(1);
 export const CliUpdateOutcomeSchema = z.enum(['succeeded', 'rolledBack', 'failed', 'pendingReconnect']);
 export type CliUpdateOutcome = z.infer<typeof CliUpdateOutcomeSchema>;
 
-/** The persisted end of one update attempt (`<installRoot>/last-update.json`). */
-export const CliUpdateLastResultSchema = z.object({
-  targetVersion: NonEmptyString,
-  outcome: CliUpdateOutcomeSchema,
+/**
+ * The persisted end of one update attempt (`<installRoot>/last-update.json`). `targetVersion` is
+ * the version the attempt was bound to; only a `failed` attempt can lack one — the release could
+ * not even be resolved (e.g. GitHub unreachable), so no version was chosen.
+ */
+const CliUpdateLastResultFields = {
   /** Epoch milliseconds when this outcome was recorded. */
   at: z.number().int().nonnegative(),
   message: z.string().nullable(),
-});
+};
+export const CliUpdateLastResultSchema = z.union([
+  z.object({
+    targetVersion: NonEmptyString,
+    outcome: z.enum(['succeeded', 'rolledBack', 'pendingReconnect']),
+    ...CliUpdateLastResultFields,
+  }),
+  z.object({
+    targetVersion: NonEmptyString.nullable(),
+    outcome: z.literal('failed'),
+    ...CliUpdateLastResultFields,
+  }),
+]);
 export type CliUpdateLastResult = z.infer<typeof CliUpdateLastResultSchema>;
 
 /**

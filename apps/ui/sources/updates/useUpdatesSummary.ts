@@ -1,8 +1,9 @@
 import * as React from 'react';
 
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useAllMachines } from '@/sync/domains/state/storage';
 
-import { buildUpdatesSummary, type UpdatesSummary } from './items/buildUpdatesSummary';
+import { buildUpdatesSummary, isSameUpdatesSummary, type UpdatesSummary } from './items/buildUpdatesSummary';
 import { useMachinesCapabilitySnapshots } from './machineCapabilitySnapshots';
 import { useMachineUpdateRuns, useUnseenUpdateCompletions } from './machineUpdateRuns';
 import { buildMachineUpdateGroups, readUpdatableInstallables } from './buildMachineUpdateGroups';
@@ -20,15 +21,17 @@ export function useUpdatesSummary(): UpdatesSummary {
     const app = useAppUpdateStatus();
     const thisComputer = useThisComputerCliUpdate();
     const machines = useAllMachines();
-    const runs = useMachineUpdateRuns();
+    // The server these machines belong to: its runs and its cached detects, never another server's.
+    const serverId = useActiveServerSnapshot().serverId;
+    const runs = useMachineUpdateRuns(serverId);
     const completions = useUnseenUpdateCompletions();
     // Observes (never fetches) the cached detects: K6 agent facts and helper latest versions that
     // the installables background owner keeps fresh, and each daemon's `tool.systemTasks` kinds.
     const machineIds = React.useMemo(() => machines.map((machine) => machine.id), [machines]);
-    const snapshots = useMachinesCapabilitySnapshots(machineIds);
+    const snapshots = useMachinesCapabilitySnapshots(serverId, machineIds);
     const installables = React.useMemo(readUpdatableInstallables, []);
     const summary = React.useMemo(() => {
-        const { groups } = buildMachineUpdateGroups({
+        const { groups, uncheckedMachineCount } = buildMachineUpdateGroups({
             machines,
             thisMachineId: thisComputer.machineId,
             thisComputerItem: thisComputer.item,
@@ -36,13 +39,13 @@ export function useUpdatesSummary(): UpdatesSummary {
             snapshots,
             installables,
         });
-        return buildUpdatesSummary([app.model.item, ...groups.flatMap((group) => group.items)], completions);
+        return buildUpdatesSummary([app.model.item, ...groups.flatMap((group) => group.items)], completions, { uncheckedMachineCount });
     }, [app.model.item, completions, installables, machines, runs, snapshots, thisComputer.item, thisComputer.machineId]);
-    return React.useMemo(
-        () => summary,
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- identity follows the summary's values
-        [summary.actionableCount, summary.phase, summary.status, summary.visible],
-    );
+    // Same values → same object, for every field (`isSameUpdatesSummary`), so entries re-render
+    // only when something they show changed.
+    const stableRef = React.useRef(summary);
+    if (!isSameUpdatesSummary(stableRef.current, summary)) stableRef.current = summary;
+    return stableRef.current;
 }
 
 const NOTHING_TO_SHOW: UpdatesSummary = {

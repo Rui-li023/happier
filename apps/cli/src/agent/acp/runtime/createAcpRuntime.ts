@@ -16,6 +16,7 @@ import {
   handleAcpModelOutputDelta,
   handleAcpStatusRunning,
 } from '@/agent/acp/bridge/acpCommonHandlers';
+import { reconcileModelOutput, type ModelOutputReconciliationState } from '@/agent/core/reconcileModelOutput';
 import { createAcpAgentMessageForwarder } from '@/agent/acp/bridge/createAcpAgentMessageForwarder';
 import { isThinkingToolName } from '@/agent/acp/bridge/thinkingToolCall';
 import { recordToolTraceEvent } from '@/agent/tools/trace/toolTrace';
@@ -569,8 +570,7 @@ export function createAcpRuntime(params: {
     update: { title?: string | null; updatedAt?: string | null };
     observedAt: number;
   }> | null = null;
-  let accumulatedResponse = '';
-  let accumulatedAssistantSegmentResponse = '';
+  const modelOutputState: ModelOutputReconciliationState = { turnText: '', segmentText: '' };
   let accumulatedThinkingText = '';
   let isResponseInProgress = false;
   let taskStartedSent = false;
@@ -807,8 +807,8 @@ export function createAcpRuntime(params: {
         maxEntries: SESSION_MEDIA_MESSAGE_MAX_ENTRIES_V1,
       });
     }
-    accumulatedResponse = '';
-    accumulatedAssistantSegmentResponse = '';
+    modelOutputState.turnText = '';
+    modelOutputState.segmentText = '';
     accumulatedThinkingText = '';
     isResponseInProgress = false;
     taskStartedSent = false;
@@ -1320,24 +1320,7 @@ export function createAcpRuntime(params: {
 
       switch (msg.type) {
         case 'model-output': {
-          const fullText = typeof (msg as any).fullText === 'string' ? String((msg as any).fullText) : '';
-          let deltaRaw = typeof (msg as any).textDelta === 'string' ? String((msg as any).textDelta) : '';
-          if (!deltaRaw && fullText) {
-            const fullTextScope = msg.fullTextScope ?? 'turn';
-            const reconciledText = fullTextScope === 'segment'
-              ? accumulatedAssistantSegmentResponse
-              : accumulatedResponse;
-            if (fullText.startsWith(reconciledText)) {
-              deltaRaw = fullText.slice(reconciledText.length);
-            } else {
-              // Defensive: if a provider restarts and sends divergent fullText, restart snapshot reconciliation.
-              if (fullTextScope === 'turn') {
-                accumulatedResponse = '';
-              }
-              accumulatedAssistantSegmentResponse = '';
-              deltaRaw = fullText;
-            }
-          }
+          const deltaRaw = reconcileModelOutput(modelOutputState, msg);
           if (acpTraceMarkersEnabled && sessionId && deltaRaw.includes('ACP_STUB_')) {
             // Trace only deterministic stub markers (never arbitrary assistant text) so provider harness
             // can coordinate mid-turn steer without requiring tool-calls or vendor credentials.
@@ -1355,12 +1338,9 @@ export function createAcpRuntime(params: {
             messageBuffer: params.messageBuffer,
             getIsResponseInProgress: () => isResponseInProgress,
             setIsResponseInProgress: (value) => { isResponseInProgress = value; },
-            appendToAccumulatedResponse: (delta) => {
-              accumulatedResponse += delta;
-              accumulatedAssistantSegmentResponse += delta;
-            },
+            appendToAccumulatedResponse: () => {},
           });
-          params.turnAssistantPreviewTracker?.replace(accumulatedResponse);
+          params.turnAssistantPreviewTracker?.replace(modelOutputState.turnText);
 
           if (deltaRaw) {
             streamedTranscriptWriter.appendAssistantDelta(deltaRaw);
@@ -1432,7 +1412,7 @@ export function createAcpRuntime(params: {
             break;
           }
 
-          accumulatedAssistantSegmentResponse = '';
+          modelOutputState.segmentText = '';
           void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' });
           params.messageBuffer.addMessage(`Executing: ${msg.toolName}`, 'tool');
           recordToolCall(msg.callId, msg.toolName);
@@ -1595,7 +1575,7 @@ export function createAcpRuntime(params: {
           } catch (e) {
             logger.debug(`[${params.provider}] Failed to run permission-request hook (non-fatal)`, e);
           }
-          accumulatedAssistantSegmentResponse = '';
+          modelOutputState.segmentText = '';
           void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' }).finally(() => {
             forwarder.forward(msg);
           });

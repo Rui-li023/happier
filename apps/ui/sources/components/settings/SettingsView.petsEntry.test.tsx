@@ -151,7 +151,8 @@ vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
     MachineCliGlyphs: 'MachineCliGlyphs',
 }));
 
-vi.mock('@/agents/catalog/catalog', () => ({
+vi.mock('@/agents/catalog/catalog', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/agents/catalog/catalog')>()),
     DEFAULT_AGENT_ID: 'agent_default',
     getAgentCore: () => ({ uiConnectedService: { serviceId: 'anthropic', label: 'Anthropic', connectRoute: null } }),
     resolveAgentIdFromConnectedServiceId: () => null,

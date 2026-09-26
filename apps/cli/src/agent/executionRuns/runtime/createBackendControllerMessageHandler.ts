@@ -4,6 +4,7 @@ import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 import { createAcpAgentMessageForwarder } from '@/agent/acp/bridge/createAcpAgentMessageForwarder';
 import type { AcpSendFn } from '@/agent/acp/bridge/acpSessionForwarding';
 import type { AgentMessage, AgentMessageHandler, SessionId } from '@/agent/core/AgentBackend';
+import { reconcileModelOutput, resetModelOutputSegment } from '@/agent/core/reconcileModelOutput';
 import type { ExecutionRunBackendController } from '@/agent/executionRuns/controllers/types';
 import type { ExecutionRunState } from '@/agent/executionRuns/runtime/executionRunTypes';
 import { computeSidechainStreamText } from '@/agent/executionRuns/runtime/sidechainStreamText';
@@ -27,6 +28,32 @@ function isExecutionRunActivityMessage(msg: AgentMessage): boolean {
     default:
       return false;
   }
+}
+
+function isModelOutputSegmentBoundary(msg: AgentMessage): boolean {
+  switch (msg.type) {
+    case 'tool-call':
+    case 'tool-result':
+    case 'fs-edit':
+    case 'terminal-output':
+    case 'patch-apply-begin':
+    case 'patch-apply-end':
+      return true;
+    case 'status':
+      return msg.status === 'starting' || msg.status === 'running';
+    default:
+      return false;
+  }
+}
+
+function applyModelOutput(ctrl: ExecutionRunBackendController, msg: Extract<AgentMessage, { type: 'model-output' }>): void {
+  const state = {
+    turnText: ctrl.buffer,
+    segmentText: ctrl.modelOutputSegmentSnapshot ?? '',
+  };
+  reconcileModelOutput(state, msg);
+  ctrl.buffer = state.turnText;
+  ctrl.modelOutputSegmentSnapshot = state.segmentText;
 }
 
 export function createBackendControllerMessageHandler(args: Readonly<{
@@ -81,6 +108,15 @@ export function createBackendControllerMessageHandler(args: Readonly<{
 
     const shouldWriteActivityMarker = isExecutionRunActivityMessage(msg);
 
+    if (isModelOutputSegmentBoundary(msg)) {
+      const state = {
+        turnText: args.ctrl.buffer,
+        segmentText: args.ctrl.modelOutputSegmentSnapshot ?? '',
+      };
+      resetModelOutputSegment(state);
+      args.ctrl.modelOutputSegmentSnapshot = state.segmentText;
+    }
+
     if (
       args.ctrl.streamWriter
       && (
@@ -97,11 +133,7 @@ export function createBackendControllerMessageHandler(args: Readonly<{
 
     if (msg.type === 'model-output') {
       const prevFullText = args.ctrl.buffer;
-      if (typeof msg.fullText === 'string') {
-        args.ctrl.buffer = msg.fullText;
-      } else if (typeof msg.textDelta === 'string') {
-        args.ctrl.buffer += msg.textDelta;
-      }
+      applyModelOutput(args.ctrl, msg);
 
       // Streaming: emit best-effort sidechain transcript updates.
       const streamWriter = args.ctrl.streamWriter;

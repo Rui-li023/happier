@@ -547,6 +547,71 @@ rl.on('line', (line) => {
   return scriptPath;
 }
 
+function writeFakePiRpcCompactionBusyResumeRaceScript(dir: string, promptLogPath: string): string {
+  const scriptPath = join(dir, 'fake-pi-rpc-compaction-busy-resume-race.js');
+  const script = `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+const out = (obj) => process.stdout.write(JSON.stringify(obj) + '\\n');
+let promptCount = 0;
+globalThis.__piStreaming = false;
+
+rl.on('line', (line) => {
+  let command;
+  try {
+    command = JSON.parse(line);
+  } catch {
+    return;
+  }
+
+  switch (command.type) {
+    case 'new_session':
+      out({ id: command.id, type: 'response', command: 'new_session', success: true, data: { cancelled: false } });
+      break;
+    case 'get_state':
+      out({ id: command.id, type: 'response', command: 'get_state', success: true, data: {
+        sessionId: 'pi-session-lifecycle',
+        isStreaming: globalThis.__piStreaming === true,
+        isCompacting: false,
+        model: { id: 'gpt-4o-mini', provider: 'openai', name: 'GPT-4o mini' },
+      } });
+      break;
+    case 'get_available_models':
+      out({ id: command.id, type: 'response', command: 'get_available_models', success: true, data: { models: [{ id: 'gpt-4o-mini', provider: 'openai', name: 'GPT-4o mini' }] } });
+      break;
+    case 'get_commands':
+      out({ id: command.id, type: 'response', command: 'get_commands', success: true, data: { commands: [] } });
+      break;
+    case 'get_session_stats':
+      out({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { sessionId: 'pi-session-lifecycle' } });
+      break;
+    case 'prompt':
+      promptCount += 1;
+      fs.appendFileSync(${JSON.stringify(promptLogPath)}, JSON.stringify({ message: command.message, streamingBehavior: command.streamingBehavior ?? null }) + '\\n');
+      out({ id: command.id, type: 'response', command: 'prompt', success: true });
+      if (promptCount === 1) {
+        globalThis.__piStreaming = true;
+        out({ type: 'agent_start' });
+        setTimeout(() => out({ type: 'compaction_start', reason: 'threshold', compactionId: 'compact-busy-race-1' }), 10);
+        setTimeout(() => out({ type: 'compaction_end', reason: 'threshold', compactionId: 'compact-busy-race-1', willRetry: false, result: { tokensBefore: 1800 } }), 20);
+        setTimeout(() => out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta' }, message: { role: 'assistant', content: [{ type: 'text', text: 'artifact after compaction' }] } }), 65);
+        setTimeout(() => out({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'artifact after compaction' }] } }), 70);
+        setTimeout(() => out({ type: 'agent_end' }), 75);
+        setTimeout(() => { globalThis.__piStreaming = false; }, 80);
+      }
+      break;
+    default:
+      out({ id: command.id, type: 'response', command: command.type, success: true });
+      break;
+  }
+});
+`;
+  writeFileSync(scriptPath, script, 'utf8');
+  chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
 function createBackend(params: Readonly<{
   workDir: string;
   scriptPath: string;
@@ -742,6 +807,30 @@ describe('PiRpcBackend pending turn lifecycle', () => {
       shortenPendingTurnTimeout(backend, 50);
 
       await expect(backend.sendPrompt(session.sessionId, 'keep working')).resolves.toBeUndefined();
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it('does not enqueue compaction recovery while Pi is still streaming the interrupted artifact', async () => {
+    const workDir = makeTempDir('happier-pi-rpc-compaction-busy-resume-race-');
+    tempDirs.push(workDir);
+    const promptLogPath = join(workDir, 'prompts.jsonl');
+    const backend = createBackend({
+      workDir,
+      scriptPath: writeFakePiRpcCompactionBusyResumeRaceScript(workDir, promptLogPath),
+      env: {
+        HAPPIER_PI_RPC_COMPACTION_RESUME_GRACE_MS: '25',
+        HAPPIER_PI_RPC_AGENT_END_SETTLE_MS: '10',
+      },
+    });
+    shortenPendingTurnTimeout(backend, 200);
+
+    try {
+      const session = await backend.startSession();
+      await expect(backend.sendPrompt(session.sessionId, 'produce the artifact')).resolves.toBeUndefined();
+      const prompts = readFileSync(promptLogPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      expect(prompts).toHaveLength(1);
     } finally {
       await backend.dispose();
     }

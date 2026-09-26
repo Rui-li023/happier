@@ -3,6 +3,7 @@ import { AGENT_IDS } from '@/agents/catalog/catalog';
 import { isAgentAuthProbeSafeForBackgroundChecks } from '@happier-dev/agents';
 import { CHECKLIST_IDS } from '@happier-dev/protocol/checklists';
 import { buildAgentCliCapabilityId } from './agentCliCapabilityId';
+import { getInstallablesRegistryEntries } from './installablesRegistry';
 
 function buildCliLoginStatusOverrides(): Partial<Record<CapabilityId, { params: { includeLoginStatus: true } }>> {
     const overrides: Partial<Record<CapabilityId, { params: { includeLoginStatus: true } }>> = {};
@@ -35,4 +36,14 @@ export function buildUpdatesCapabilitiesRequest(installableRequests: readonly Ca
             ...installableRequests.flatMap((request) => request.requests ?? []),
         ],
     };
+}
+
+/**
+ * The update-facts request every Updates owner sends (the background owner, the open surface's
+ * refresh) and the one Updates coverage is measured against: every agent CLI with its latest
+ * version, every helper's latest-version check, the task kinds.
+ */
+export function buildMachineUpdateFactsRequest(): CapabilitiesDetectRequest {
+    const installables = getInstallablesRegistryEntries().filter((entry) => entry.shouldPrefetchLatestVersion({}));
+    return buildUpdatesCapabilitiesRequest(installables.map((entry) => entry.buildLatestVersionDetectRequest()));
 }

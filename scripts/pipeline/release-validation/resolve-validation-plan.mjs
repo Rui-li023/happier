@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 
 import {
   RELEASE_VALIDATION_SUITE_IDS,
+  resolveDesktopSetupCliSource,
   resolveAutomaticReleaseValidationExecution,
   resolveReleaseValidationSuite,
   resolveReleaseValidationSuiteApplicability,
@@ -115,7 +116,7 @@ export function resolveReleaseValidationPlan(input) {
  * as every profile suite; the hard stop derives from the suite's registry budget.
  * @param {{
  *   suiteId: string;
- *   hasCliCandidate: boolean;
+ *   candidateCliVersion: string;
  *   hasDesktopCandidate: boolean;
  *   candidateChannel: string;
  * }} input
@@ -123,15 +124,20 @@ export function resolveReleaseValidationPlan(input) {
 export function resolveReleaseValidationSuiteGate(input) {
   const suite = resolveReleaseValidationSuite(input.suiteId);
   if (!suite) throw new Error(`Unknown release validation suite: ${input.suiteId}`);
+  if (suite.id !== 'desktop-setup') throw new Error(`Release validation suite ${suite.id} is not a build gate`);
+  const candidateCliVersion = String(input.candidateCliVersion ?? '').trim();
   const { selected, skipReason } = resolveReleaseValidationSuiteApplicability(suite.id, {
-    hasCliCandidate: input.hasCliCandidate,
+    hasCliCandidate: candidateCliVersion !== '',
     hasDesktopCandidate: input.hasDesktopCandidate,
     candidateChannel: input.candidateChannel,
   });
+  const cli = selected ? resolveDesktopSetupCliSource({ candidateChannel: input.candidateChannel, candidateCliVersion }) : null;
   return {
     run: String(selected),
     skip_reason: skipReason ?? '',
     timeout_minutes: String(resolveReleaseValidationSuiteTimeoutMinutes(suite)),
+    cli_source: cli?.kind ?? '',
+    cli_ref: cli?.ref ?? '',
   };
 }
 
@@ -143,6 +149,7 @@ export async function main(argv = process.argv.slice(2)) {
     'has-cli-candidate': { type: 'string', default: 'false' },
     'has-server-candidate': { type: 'string', default: 'false' },
     'has-desktop-candidate': { type: 'string', default: 'false' },
+    'candidate-cli-version': { type: 'string', default: '' },
     'candidate-channel': { type: 'string', default: '' },
     'has-published-relay-predecessor': { type: 'string', default: 'false' },
     'risk-cli-upgrade': { type: 'string', default: 'false' },
@@ -159,7 +166,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (String(values.profile ?? '').trim()) throw new Error('--suite and --profile are exclusive');
     const gate = resolveReleaseValidationSuiteGate({
       suiteId,
-      hasCliCandidate: bool(values['has-cli-candidate'], '--has-cli-candidate'),
+      candidateCliVersion: String(values['candidate-cli-version'] ?? ''),
       hasDesktopCandidate: bool(values['has-desktop-candidate'], '--has-desktop-candidate'),
       candidateChannel: String(values['candidate-channel'] ?? '').trim(),
     });
@@ -168,8 +175,8 @@ export async function main(argv = process.argv.slice(2)) {
     else process.stdout.write(`${JSON.stringify(gate)}\n`);
     return gate;
   }
-  if (bool(values['has-desktop-candidate'], '--has-desktop-candidate') || String(values['candidate-channel'] ?? '').trim()) {
-    throw new Error('--has-desktop-candidate and --candidate-channel apply only to --suite (desktop-setup gates build-tauri.yml)');
+  if (bool(values['has-desktop-candidate'], '--has-desktop-candidate') || String(values['candidate-channel'] ?? '').trim() || String(values['candidate-cli-version'] ?? '').trim()) {
+    throw new Error('--has-desktop-candidate, --candidate-channel and --candidate-cli-version apply only to --suite (desktop-setup gates build-tauri.yml)');
   }
   const csv = (value) => String(value ?? '').split(',').map((item) => item.trim()).filter(Boolean);
   const result = resolveReleaseValidationPlan({

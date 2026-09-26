@@ -102,6 +102,11 @@ These stable links always resolve to the current release. Every immutable build
 is listed on the [releases page](${m.desktopReleases}) if you need an older one
 or a different architecture.
 
+Homebrew is coming for macOS, but is not published yet: once the \`happier\` cask is accepted into
+Homebrew, \`brew install --cask happier\` will install the same notarized DMG. The app keeps
+updating itself either way, so a plain \`brew upgrade\` leaves it alone; \`brew upgrade --greedy\`
+also upgrades it.
+
 ## On the machine that runs your agents
 
 This is the part that does the work, and it is a CLI rather than an app:
@@ -117,8 +122,9 @@ ${m.installWindows}
 \`\`\`
 
 The installer verifies every release signature before unpacking. See
-[CLI](/apps/cli) for the other install routes, release channels, and what to
-do when the command is not found afterwards.
+[CLI](/apps/cli) for the other install routes (a [Homebrew formula](/apps/cli#homebrew-coming-soon)
+is prepared but not published yet), release channels, and what to do when the
+command is not found afterwards.
 
 ## Related
 

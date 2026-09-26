@@ -220,11 +220,17 @@ export function resolveSpawnDetachedNodeInvocation(params: Readonly<{ execPath: 
   return { file: execPath, args: [...params.args], isRuntime };
 }
 
+export type DetachedSpawnResult = Readonly<{
+  started: boolean;
+  /** The child's report pipe when `admissionFdEnvName` was given. */
+  admission: NodeJS.ReadableStream | null;
+}>;
+
 /**
  * Start this program (the running binary, or `script` under the running Node/Bun) detached, so it
  * outlives the caller: the background update check, and the daemon-started CLI updater, which must
  * survive the service restart it performs. Output is discarded, or appended to `logPath`. Never
- * throws; returns whether the process started.
+ * throws; reports whether the process started.
  */
 export function spawnDetachedNode(params: Readonly<{
   script: string;
@@ -232,7 +238,13 @@ export function spawnDetachedNode(params: Readonly<{
   cwd: string;
   env: NodeJS.ProcessEnv;
   logPath?: string;
-}>): boolean {
+  /**
+   * Give the child one extra pipe (fd 3, named to it by `admissionFdEnvName`) for a single report
+   * back to this process — stdout/stderr stay on `logPath`, so the child never writes to a pipe
+   * whose reader may be gone once it outlives this process.
+   */
+  admissionFdEnvName?: string;
+}>): DetachedSpawnResult {
   let logFd: number | null = null;
   try {
     const resolved = resolveSpawnDetachedNodeInvocation({
@@ -244,10 +256,11 @@ export function spawnDetachedNode(params: Readonly<{
       mkdirSync(dirname(params.logPath), { recursive: true });
       logFd = openSync(params.logPath, 'a');
     }
+    const output = logFd === null ? 'ignore' : logFd;
     const child = spawn(resolved.file, resolved.args, {
-      stdio: logFd === null ? 'ignore' : ['ignore', logFd, logFd],
+      stdio: params.admissionFdEnvName ? ['ignore', output, output, 'pipe'] : ['ignore', output, output],
       cwd: resolved.isRuntime ? params.cwd : process.cwd(),
-      env: { ...params.env },
+      env: { ...params.env, ...(params.admissionFdEnvName ? { [params.admissionFdEnvName]: '3' } : {}) },
       detached: true,
       windowsHide: true,
     });
@@ -255,9 +268,11 @@ export function spawnDetachedNode(params: Readonly<{
       // Reported through the return value's absent pid; never an unhandled error event.
     });
     child.unref();
-    return typeof child.pid === 'number';
+    if (typeof child.pid !== 'number') return { started: false, admission: null };
+    const admission = params.admissionFdEnvName ? child.stdio[3] : null;
+    return { started: true, admission: admission && 'on' in admission ? admission as NodeJS.ReadableStream : null };
   } catch {
-    return false;
+    return { started: false, admission: null };
   } finally {
     if (logFd !== null) {
       try {

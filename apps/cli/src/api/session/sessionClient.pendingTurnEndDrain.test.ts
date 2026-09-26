@@ -1,6 +1,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { createSessionProviderInputConsumer } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
+import { createClaudeUnifiedInputArbiter } from '@/backends/claude/unifiedTerminal/createClaudeUnifiedInputArbiter';
+import { createClaudeUnifiedPendingQueuePump } from '@/backends/claude/unifiedTerminal/createClaudeUnifiedPendingQueuePump';
 import { createDeferred } from '@/testkit/async/deferred';
 import { createPlainSessionFixture } from '@/testkit/backends/sessionFixtures';
 import {
@@ -3364,6 +3368,87 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
     expect(materializeNextMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['while_waiting', 'before_waiting'] as const)(
+    'wakes the idle terminal pump when exact server retirement clears its submitted head %s', async (retirementTiming) => {
+    const client = await createClient({
+      latestTurnStatus: 'completed', pendingCount: 1, pendingVersion: 1,
+      metadata: { deliveredUserMessageSeqV1: 0 },
+    });
+    await waitForCurrentPendingInputContract(client);
+    const messageQueue = new MessageQueue2<null>(() => 'mode');
+    client.onUserMessage((message) => {
+      messageQueue.push(message.content.text, null, { userMessageLocalId: message.localId });
+    });
+    materializeNextMock
+      .mockResolvedValueOnce(createProviderDeliveryMaterializeResult('manual-handled-local', 2))
+      .mockResolvedValueOnce(createProviderDeliveryMaterializeResult('later-local', 4));
+    listDeliveryStatusesMock.mockResolvedValue([{ localId: 'manual-handled-local', status: 'delivering' }]);
+    const injected: string[] = [];
+    const arbiter = createClaudeUnifiedInputArbiter<null>({
+      quietPeriodMs: 0,
+      injectPrompt: async (batch) => {
+        injected.push(batch.userMessageLocalIds?.[0] ?? 'missing');
+        if (injected.length === 1 && retirementTiming === 'before_waiting') {
+          listDeliveryStatusesMock.mockResolvedValue([{ localId: 'later-local', status: 'queued' }]);
+          await client.reconcilePendingQueueState();
+        }
+        return { status: 'injected', at: Date.now(), bytesWritten: batch.message.length };
+      },
+      resolvePromptDeliveryState: (batch) => client.hasCanonicalPendingProviderInputDelivery(batch.userMessageLocalIds?.[0] ?? '')
+        ? 'pending' : 'retired',
+    });
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: Date.now() });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: Date.now() });
+    const inputConsumer = createSessionProviderInputConsumer({ messageQueue, session: client });
+    const pendingDeliveryState = {
+      waitForPendingEligibilityUpdate: client.waitForPendingEligibilityUpdate.bind(client),
+      reconcilePendingQueueState: client.reconcilePendingQueueState.bind(client),
+    };
+    const pump = createClaudeUnifiedPendingQueuePump({ inputConsumer, arbiter, pendingDeliveryState });
+    const abortController = new AbortController();
+    const running = pump.start({ abortSignal: abortController.signal });
+    try {
+      if (retirementTiming === 'while_waiting') {
+        await waitUntil(() => arbiter.snapshot().providerAcceptancePendingCount === 1);
+        expect(injected).toEqual(['manual-handled-local']);
+        // No provider hook or terminal output follows this external manual handling.
+        listDeliveryStatusesMock.mockResolvedValue([{ localId: 'later-local', status: 'queued' }]);
+        await client.reconcilePendingQueueState();
+        expect(client.hasCanonicalPendingProviderInputDelivery('manual-handled-local')).toBe(false);
+      }
+      await waitUntil(() => injected.length === 2);
+      expect(injected).toEqual(['manual-handled-local', 'later-local']);
+      expect(client.hasPendingProviderInputAcceptance('manual-handled-local')).toBe(false);
+      expect(materializeNextMock).toHaveBeenCalledTimes(2);
+    } finally {
+      abortController.abort();
+      pump.dispose();
+      await running;
+      await arbiter.dispose();
+    }
+    expect(client.listenerCount('pending-eligibility-updated')).toBe(0);
+  });
+
+  it('retires externally handled blocked custody without manufacturing provider acceptance', async () => {
+    const client = await createClient({
+      latestTurnStatus: 'completed', pendingCount: 1, pendingVersion: 1,
+      metadata: { deliveredUserMessageSeqV1: 0 },
+    });
+    await waitForCurrentPendingInputContract(client);
+    client.onUserMessage(() => {});
+    materializeNextMock.mockResolvedValueOnce(createProviderDeliveryMaterializeResult('blocked-handled-local'));
+    blockPendingDeliveryMock.mockResolvedValueOnce({
+      pendingQueueState: { known: true, pendingCount: 1, pendingBlockedCount: 1, pendingVersion: 3 },
+    });
+    await client.materializeNextPendingMessageSafely();
+    await client.blockPendingMessageDelivery({ localIds: ['blocked-handled-local'], reason: 'ambiguous_terminal_delivery' });
+    expect(client.hasCanonicalPendingProviderInputDelivery('blocked-handled-local')).toBe(true);
+    listDeliveryStatusesMock.mockResolvedValue([]);
+    await client.reconcilePendingQueueState({ force: true });
+    expect(client.hasCanonicalPendingProviderInputDelivery('blocked-handled-local')).toBe(false);
+    expect(client.hasPendingProviderInputAcceptance('blocked-handled-local')).toBe(false);
+  });
+
   it('retires exact local custody after manual handling deletes the server row and materializes the later row once', async () => {
     const client = await createClient({
       latestTurnStatus: 'completed',
@@ -3455,6 +3540,10 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
     client.onUserMessage((message) => {
       if (message.localId) providerInvocations.push(message.localId);
     });
+    listDeliveryStatusesMock.mockResolvedValue([
+      { localId: dismissedLocalId, status: 'blocked' },
+      { localId: laterLocalId, status: 'queued' },
+    ]);
     materializeNextMock
       .mockResolvedValueOnce({
         ...createProviderDeliveryMaterializeResult(dismissedLocalId, 2),
@@ -4249,6 +4338,10 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
       metadata: { deliveredUserMessageSeqV1: 0 },
     });
     await waitForCurrentPendingInputContract(client);
+    listDeliveryStatusesMock.mockResolvedValue([
+      { localId: uncertainLocalId, status: 'blocked' },
+      { localId: replacementLocalId, status: 'queued' },
+    ]);
     materializeNextMock
       .mockResolvedValueOnce({
         ...createProviderDeliveryMaterializeResult(uncertainLocalId, 2),

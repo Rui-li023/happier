@@ -300,14 +300,10 @@ jobs:
           set -euo pipefail
           yarn --cwd apps/ui tsx sources/scripts/parseReleaseNotes.ts
 
-      - name: Android APK (dev lane) + rolling GitHub release
+      - name: Build Android APK (dev lane, cloud)
         if: inputs.publish_android_apk && inputs.eas_builder == 'eas_cloud'
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-          # GitHub App tokens are short-lived and can expire during long native builds.
-          # Use the job-scoped GITHUB_TOKEN for release publishing so the lane stays idempotent.
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           node scripts/pipeline/run.mjs ui-mobile-release \
@@ -321,6 +317,7 @@ jobs:
             --out-dir "dist/ui-mobile" \
             --eas-cli-version "${EAS_CLI_VERSION}" \
             --release-message "${{ inputs.release_message }}" \
+            --publish-apk-release false \
             --secrets-source env
 
       - name: Install Dagger (local Android builds)
@@ -329,15 +326,11 @@ jobs:
         with:
           version: "0.19.11"
 
-      - name: Android APK (dev lane) (local via Dagger) + rolling GitHub release
+      - name: Build Android APK (dev lane, local via Dagger)
         if: inputs.publish_android_apk && inputs.eas_builder == 'eas_local'
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          # GitHub App tokens are short-lived and can expire during long native builds.
-          # Use the job-scoped GITHUB_TOKEN for release publishing so the lane stays idempotent.
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           node scripts/pipeline/run.mjs ui-mobile-release \
@@ -352,7 +345,44 @@ jobs:
             --out-dir "dist/ui-mobile" \
             --eas-cli-version "${EAS_CLI_VERSION}" \
             --release-message "${{ inputs.release_message }}" \
+            --publish-apk-release false \
             --secrets-source env
+
+      - name: Create GitHub App token (APK publishing)
+        if: inputs.publish_android_apk
+        id: apk_token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Publish built dev APK
+        if: inputs.publish_android_apk
+        env:
+          GH_TOKEN: ${{ steps.apk_token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          EAS_BUILDER: ${{ inputs.eas_builder }}
+          RELEASE_MESSAGE: ${{ inputs.release_message }}
+        run: |
+          set -euo pipefail
+          apk="dist/ui-mobile/happier-dev-android.apk"
+          if [ ! -f "$apk" ]; then
+            if [ "$EAS_BUILDER" = 'eas_cloud' ]; then
+              echo 'No cloud Android build was scheduled; skipping APK publication.' >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Expected built APK at $apk." >&2
+            exit 1
+          fi
+          AUTHORIZED_SHA="$(git rev-parse HEAD)"
+          node scripts/pipeline/expo/publish-apk-release.mjs \
+            --environment dev \
+            --apk-path "$apk" \
+            --target-sha "$AUTHORIZED_SHA" \
+            --release-message "$RELEASE_MESSAGE"
 
       - name: Note
         run: |

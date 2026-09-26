@@ -6,29 +6,35 @@ import {
     type MachineCapabilitiesSnapshot,
 } from '@/hooks/server/useMachineCapabilitiesCache';
 
-/** Observes the capability cache of several machines at once, without fetching. */
-export function useMachinesCapabilitySnapshots(machineIds: readonly string[]): ReadonlyMap<string, MachineCapabilitiesSnapshot | null> {
+/**
+ * Observes the capability cache of several machines of one server at once, without fetching. The
+ * server scope is explicit so a server switch re-subscribes to that server's entries.
+ */
+export function useMachinesCapabilitySnapshots(
+    serverId: string,
+    machineIds: readonly string[],
+): ReadonlyMap<string, MachineCapabilitiesSnapshot | null> {
     const key = machineIds.join('\u0000');
     const lastRef = React.useRef<ReadonlyMap<string, MachineCapabilitiesSnapshot | null>>(new Map());
     const subscribe = React.useCallback((listener: () => void) => {
         const ids = key ? key.split('\u0000') : [];
-        const unsubscribes = ids.map((id) => subscribeMachineCapabilitiesCacheState(id, null, null, listener));
+        const unsubscribes = ids.map((id) => subscribeMachineCapabilitiesCacheState(id, serverId, null, listener));
         return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
-    }, [key]);
+    }, [key, serverId]);
     const getSnapshot = React.useCallback(() => {
         const ids = key ? key.split('\u0000') : [];
         const previous = lastRef.current;
         let changed = previous.size !== ids.length;
         const next = new Map<string, MachineCapabilitiesSnapshot | null>();
         for (const id of ids) {
-            const snapshot = getMachineCapabilitiesSnapshot(id);
+            const snapshot = getMachineCapabilitiesSnapshot(id, serverId);
             next.set(id, snapshot);
             if (previous.get(id) !== snapshot) changed = true;
         }
         if (!changed) return previous;
         lastRef.current = next;
         return next;
-    }, [key]);
+    }, [key, serverId]);
     return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 

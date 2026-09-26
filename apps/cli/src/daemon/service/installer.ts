@@ -283,11 +283,10 @@ export async function previewDaemonServiceInstall(options: Readonly<{
       })
     : null;
 
-  // `kickstart -k` keeps launchd's loaded (possibly stale) job; a changed plist or restart needs a reload.
-  if (
-    options.darwinInstallMode === 'kickstart'
-    && (!exactTargetMatchesExpectedDefinition || exactTargetRuntimeReplacement || options.restartRunningDaemon === true)
-  ) {
+  // kickstart uses launchd's already loaded definition. A rewritten command or environment
+  // must be loaded again before restarting, including a consented managed/own CLI switch.
+  if (platform === 'darwin' && options.darwinInstallMode === 'kickstart'
+    && (!exactTargetMatchesExpectedDefinition || exactTargetRuntimeReplacement || options.restartRunningDaemon === true)) {
     plan = buildPlan(autostart, autostartTriggerChangeOnly, 'rebootstrap');
   }
 
@@ -370,6 +369,8 @@ export async function installDaemonService(options: Readonly<{
   nodePath?: string;
   entryPath?: string;
   runCommands?: boolean;
+  /** Prepare the current owner only when installation will actually change its definition. */
+  beforeApply?: () => Promise<void>;
   commandFailureMode?: DaemonServiceCommandFailureMode;
 }> = {}): Promise<void> {
   const platformInput = options.platform ?? process.platform;
@@ -412,14 +413,11 @@ export async function installDaemonService(options: Readonly<{
 
   // A runtime replacement is a real change even where the definition comparator treats launchers
   // as equivalent (darwin), so the consented switch is written rather than skipped.
-  if (
-    preview.exactTargetIsConverged
-    && preview.exactTargetMatchesExpectedDefinition
-    && !preview.exactTargetRuntimeReplacement
-    && options.restartRunningDaemon !== true
-  ) {
+  if (preview.exactTargetIsConverged && preview.exactTargetMatchesExpectedDefinition
+    && !preview.exactTargetRuntimeReplacement && options.restartRunningDaemon !== true) {
     return;
   }
+  await options.beforeApply?.();
   await applyDaemonServiceInstallPlan(preview.plan, {
     runCommands: options.runCommands,
     commandFailureMode: options.commandFailureMode,

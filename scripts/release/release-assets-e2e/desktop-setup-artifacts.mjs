@@ -108,14 +108,25 @@ export async function downloadReleaseAssets({ repo, tag, names, destDir, token }
  * @param {{ repo: string; token?: string }} params
  */
 export async function resolvePublishedStableBaseline({ repo, token }) {
-  const cliNames = (await listReleaseAssets({ repo, tag: 'cli-stable', token })).map((asset) => asset.name);
-  const cliVersion = cliNames.map((name) => CLI_CHECKSUMS_RE.exec(name)?.[1]).find(Boolean);
+  const cliTag = await resolvePublishedCliTag({ repo, channel: 'stable', token }).catch(() => null);
+  const cliVersion = cliTag?.slice('cli-v'.length);
   const desktopNames = (await listReleaseAssets({ repo, tag: 'ui-desktop-stable', token })).map((asset) => asset.name);
   const desktopVersion = desktopNames.map((name) => DESKTOP_DEB_SHA_RE.exec(name)?.[1]).find(Boolean);
   if (!cliVersion || !desktopVersion) {
     throw new Error(`could not resolve the published stable baseline (cli=${cliVersion ?? 'none'}, desktop=${desktopVersion ?? 'none'})`);
   }
   return { cliTag: `cli-v${cliVersion}`, desktopTag: `ui-desktop-v${desktopVersion}` };
+}
+
+/**
+ * The immutable `cli-v<version>` a rolling `cli-<channel>` release currently points at.
+ * @param {{ repo: string; channel: string; token?: string }} params
+ */
+export async function resolvePublishedCliTag({ repo, channel, token }) {
+  const names = (await listReleaseAssets({ repo, tag: `cli-${channel}`, token })).map((asset) => asset.name);
+  const version = names.map((name) => CLI_CHECKSUMS_RE.exec(name)?.[1]).find(Boolean);
+  if (!version) throw new Error(`could not resolve the published cli-${channel} release to a cli-v<version> tag`);
+  return `cli-v${version}`;
 }
 
 /**

@@ -1,6 +1,6 @@
 import type { CliUpdateFacts } from '@happier-dev/protocol';
 
-import { isInstallableDepUpdateAvailable } from '@/capabilities/installablesUpdateAvailable';
+import { getInstallableDepUpdateAvailability } from '@/capabilities/installablesUpdateAvailable';
 import { t } from '@/text';
 import type { InstallableDepDataLike } from '@/capabilities/installablesRegistry';
 
@@ -57,7 +57,9 @@ function baseItem(params: Readonly<{
 
 function versionState(current: string | null, latest: string | null): UpdateItemState {
     if (!latest || !current) return 'unknown';
-    return isNewerVersion(current, latest) ? 'available' : 'upToDate';
+    const newer = isNewerVersion(current, latest);
+    if (newer === null) return 'unknown';
+    return newer ? 'available' : 'upToDate';
 }
 
 /**
@@ -161,7 +163,7 @@ export function buildRemoteCliUpdateItem(params: Readonly<{
             // Installed and restarting there: waiting to reconnect is not failure.
             return { ...item, state: 'running', step: 'reconnecting' };
         }
-        if (last.outcome === 'rolledBack' && currentVersion) {
+        if (last.outcome === 'rolledBack' && currentVersion && last.targetVersion) {
             return {
                 ...item,
                 state: 'failed',
@@ -173,7 +175,13 @@ export function buildRemoteCliUpdateItem(params: Readonly<{
             return {
                 ...item,
                 state: 'failed',
-                failure: { kind: 'message', message: last.message ?? t('updates.row.failedGeneric') },
+                // `targetVersion: null` — no release was resolved, so nothing was activated.
+                failure: {
+                    kind: 'message',
+                    message: last.targetVersion == null
+                        ? t('updates.row.couldNotStart', { message: last.message ?? t('updates.row.failedGeneric') })
+                        : last.message ?? t('updates.row.failedGeneric'),
+                },
                 action: params.remoteUpdateAdvertised !== false ? { kind: 'run', verb: 'retry' } : { kind: 'none' },
             };
         }
@@ -238,6 +246,23 @@ export function buildAgentCliUpdateItem(params: Readonly<{
     return updateSupported && installSource === 'native' ? { ...resolved, vendorUpdater: true } : resolved;
 }
 
+/** An agent CLI or helper whose detect errored on that machine: listed, versionless, "Couldn't check". */
+export function buildProbeFailedItem(params: Readonly<{
+    machineId: string;
+    subject: Extract<UpdateItem['subject'], { kind: 'agent-cli' | 'installable' }>;
+    title: string;
+    online: boolean;
+}>): UpdateItem {
+    const item = baseItem({
+        machineId: params.machineId,
+        subject: params.subject,
+        title: params.title,
+        currentVersion: null,
+        latestVersion: null,
+    });
+    return params.online ? { ...item, state: 'unknown', failure: { kind: 'latestUnknown' } } : { ...item, state: 'offline' };
+}
+
 /** A helper installable (GitHub CLI, codex-acp, …) from the installables registry's detect data. */
 export function buildInstallableUpdateItem(params: Readonly<{
     machineId: string;
@@ -259,12 +284,13 @@ export function buildInstallableUpdateItem(params: Readonly<{
         latestVersion,
     });
     // One predicate decides "a newer helper exists": the installables owner's own.
+    const updateAvailable = getInstallableDepUpdateAvailability(data);
     const resolved = resolveRow(item, {
         online: params.online,
         task: params.task,
         canRun: true,
         manual: null,
-        state: latestVersion == null ? 'unknown' : isInstallableDepUpdateAvailable(data) ? 'available' : 'upToDate',
+        state: updateAvailable === null ? 'unknown' : updateAvailable ? 'available' : 'upToDate',
     });
     if (resolved.state === 'unknown' && check && !check.ok) {
         return { ...resolved, failure: { kind: 'latestUnknown' } };

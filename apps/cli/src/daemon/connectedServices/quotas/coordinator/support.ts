@@ -627,6 +627,7 @@ export function deriveQuotaSnapshotStatus(snapshot: ConnectedServiceQuotaSnapsho
 export type FailureState = Readonly<{
   consecutiveFailures: number;
   nextAllowedAt: number;
+  inconclusiveRefreshProbeCount?: number;
 }>;
 
 export type CredentialRefreshReason = 'near_expiry' | 'auth_failure';
@@ -643,6 +644,13 @@ export type AccountUsageStoreForQuotaPolicy = Pick<
 > & AccountUsageStoreForAuthGroupSwitchState;
 
 export const QUOTA_AUTH_FAILURE_REAUTH_CONSECUTIVE_FAILURES = 5;
+/**
+ * Keep a credential visibly reconnect-required after repeated auth failures when
+ * the refresh owner cannot classify its probe. This is deliberately bounded so a
+ * dead credential cannot remain retryable forever, while the initial probe window
+ * still gives transient provider failures a chance to recover.
+ */
+export const QUOTA_AUTH_FAILURE_INCONCLUSIVE_PROBE_LIMIT = 10;
 
 export function readFiniteNonNegativeMs(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;

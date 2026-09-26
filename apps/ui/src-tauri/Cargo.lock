@@ -95,6 +95,7 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "gtk",
  "libc",
  "log",
  "objc2-app-kit 0.3.1",
@@ -112,6 +113,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
+ "windows-registry",
 ]
 
 [[package]]

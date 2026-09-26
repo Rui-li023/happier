@@ -4,7 +4,9 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 
 import { BugReportDiagnosticsPreviewModal, type BugReportDiagnosticsPreviewArtifact } from '../BugReportDiagnosticsPreviewModal';
+import { exportBugReportDiagnosticsBundle } from '../bugReportExport';
 import type { BugReportDiagnosticsArtifact } from '../bugReportDiagnostics';
+import type { BugReportEnvironmentPayload } from '@happier-dev/protocol';
 
 function utf8ByteLength(value: string): number {
   try {
@@ -19,7 +21,7 @@ export function useBugReportDiagnosticsPreview(input: {
   disabled: boolean;
   includeDiagnostics: boolean;
   selectedKinds: string[];
-  collectDiagnosticsArtifacts: () => Promise<{ artifacts: BugReportDiagnosticsArtifact[] }>;
+  collectDiagnosticsArtifacts: () => Promise<{ artifacts: BugReportDiagnosticsArtifact[]; environment: BugReportEnvironmentPayload }>;
 }): {
   previewing: boolean;
   previewDisabled: boolean;
@@ -42,11 +44,25 @@ export function useBugReportDiagnosticsPreview(input: {
         sizeBytes: utf8ByteLength(String(artifact.content ?? '')),
         content: String(artifact.content ?? ''),
       }));
+      const handleExport = async () => {
+        try {
+          await exportBugReportDiagnosticsBundle({
+            environment: collected.environment,
+            artifacts: collected.artifacts,
+          });
+        } catch (error) {
+          await Modal.alert(
+            t('common.error'),
+            error instanceof Error ? error.message : 'Diagnostics export failed.',
+          );
+        }
+      };
 
       Modal.show({
         component: BugReportDiagnosticsPreviewModal,
         props: {
           artifacts,
+          onExport: handleExport,
         },
         chrome: {
           kind: 'card',

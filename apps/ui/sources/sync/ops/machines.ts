@@ -7,6 +7,7 @@ import type {
     MachineUpdateMetadataResponse,
     SpawnSessionResult,
 } from '@happier-dev/protocol';
+import { MACHINE_RPC_POLL_INTERVAL_MS } from './machineRpcPollInterval';
 import {
     SPAWN_SESSION_ERROR_CODES,
     isSpawnSessionErrorDetail,
@@ -102,7 +103,7 @@ export type MachineSpawnNewSessionUntilResolvedResult =
 
 export type MachineSpawnNewSessionResult = MachineSpawnNewSessionUntilResolvedResult;
 
-const DEFAULT_MACHINE_SPAWN_NONCE_RESOLUTION_POLL_INTERVAL_MS = 1_000;
+const DEFAULT_MACHINE_SPAWN_NONCE_RESOLUTION_POLL_INTERVAL_MS = MACHINE_RPC_POLL_INTERVAL_MS;
 
 function readAuthoritativeMachineHomeDir(params: Readonly<{
     machineId: string;

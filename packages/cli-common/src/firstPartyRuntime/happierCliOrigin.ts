@@ -12,7 +12,17 @@ import { dirname, join, resolve, sep } from 'node:path';
  */
 export type HappierCliOrigin =
   | Readonly<{ kind: 'npm'; packageName: string; removalCommand: string; updateCommand: string }>
-  | Readonly<{ kind: 'brew'; formula: string; removalCommand: string; updateCommand: string }>
+  | Readonly<{
+    kind: 'brew';
+    formula: string;
+    removalCommand: string;
+    updateCommand: string;
+    /**
+     * The same file through Homebrew's opt prefix (`<prefix>/opt/<formula>/…`, a link to the active
+     * keg), which survives `brew upgrade`; `null` when the path is not inside a versioned keg.
+     */
+    optPath: string | null;
+  }>
   | Readonly<{ kind: 'unknown'; removalCommand: null; updateCommand: null }>;
 
 const UNKNOWN_ORIGIN: HappierCliOrigin = { kind: 'unknown', removalCommand: null, updateCommand: null };
@@ -32,9 +42,10 @@ export function describeHappierCliOrigin(command: string): HappierCliOrigin {
       updateCommand: `npm install -g ${packageName}@latest`,
     };
   }
-  const formula = readHomebrewFormula(realPath);
-  if (formula) {
-    return { kind: 'brew', formula, removalCommand: `brew uninstall ${formula}`, updateCommand: `brew upgrade ${formula}` };
+  const keg = readHomebrewKeg(realPath);
+  if (keg) {
+    const { formula, optPath } = keg;
+    return { kind: 'brew', formula, removalCommand: `brew uninstall ${formula}`, updateCommand: `brew upgrade ${formula}`, optPath };
   }
   return UNKNOWN_ORIGIN;
 }
@@ -79,9 +90,15 @@ function readWindowsCommandShimTarget(command: string): string | null {
   }
 }
 
-function readHomebrewFormula(path: string): string | null {
+/** `<prefix>/Cellar/<formula>/<version>/<rest>`: the formula, and `<prefix>/opt/<formula>/<rest>`. */
+function readHomebrewKeg(path: string): Readonly<{ formula: string; optPath: string | null }> | null {
   const segments = path.split(/[\\/]/u);
   const cellarIndex = segments.lastIndexOf('Cellar');
   const formula = cellarIndex >= 0 ? segments[cellarIndex + 1] : undefined;
-  return formula && SAFE_FORMULA_NAME.test(formula) ? formula : null;
+  if (!formula || !SAFE_FORMULA_NAME.test(formula)) return null;
+  const rest = segments.slice(cellarIndex + 3);
+  const optPath = segments[cellarIndex + 2] && rest.length > 0
+    ? [...segments.slice(0, cellarIndex), 'opt', formula, ...rest].join(sep)
+    : null;
+  return { formula, optPath };
 }

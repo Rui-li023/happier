@@ -31,6 +31,19 @@ the unsupported-output diagnostic.
 
 ## Session lifecycle surfaces
 
+Development-source Unified Terminal delivery keeps observing canonical Pending
+eligibility while its submitted prompt awaits provider acceptance. External manual
+handling can retire that exact row without another Claude hook or terminal output;
+the existing arbiter then releases the submitted head and admits the next prompt
+without resending the retired input or manufacturing provider acceptance. The API
+session client owns exact custody reconciliation and publishes the same Pending
+wake when local custody changes.
+
+In development source, Unified Terminal publishes its exact-host stop capability
+as soon as the attachment is persisted, before metadata publication or provider
+initialization can block. Explicit stop still destroys only that owned attachment;
+stale attachment identities cannot destroy a replacement host.
+
 In development source, the remote Agent SDK runner treats a live root
 `message_start` from its owned session after a result as renewed foreground work.
 This covers resume streams that emit a prior result before processing the supplied

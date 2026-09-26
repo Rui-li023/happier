@@ -144,3 +144,28 @@ export async function waitForAppIpcStatusRead({ recordDir, appPid, isBundledHset
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
 }
+
+/**
+ * Where the app found the hsetup it ran must be the artifact's packaged resource, never a
+ * compile-time checkout path (`hsetup_path.rs` only consults `CARGO_MANIFEST_DIR/binaries` in debug
+ * builds). Linux bundles ship the resource as `.gz`, which the app materializes under its own cache
+ * dir as `systemTasks/hsetup-materialized-<gz len>-<mtime>`; an uncompressed resource runs in place
+ * from the mounted or extracted AppImage (`…/usr/lib/<product>/binaries/<name>`).
+ * @param {{ hsetupExe: string; cacheHome: string; resource: string; resourceBytes: number }} params
+ * @returns {'materialized-resource' | 'packaged-resource'}
+ */
+export function assertPackagedHsetupResolution({ hsetupExe, cacheHome, resource, resourceBytes }) {
+  const cacheRoot = `${path.resolve(cacheHome)}${path.sep}`;
+  const materialized = /^hsetup-materialized-(\d+)-\d+$/u.exec(path.basename(hsetupExe));
+  if (hsetupExe.startsWith(cacheRoot)
+    && path.basename(path.dirname(hsetupExe)) === 'systemTasks'
+    && materialized
+    && Number(materialized[1]) === resourceBytes) {
+    return 'materialized-resource';
+  }
+  const inPlace = resource.replace(/\.gz$/u, '');
+  if (hsetupExe.endsWith(`${path.sep}${inPlace}`) && /(^|\/)(\.mount_[^/]+|squashfs-root)\//u.test(hsetupExe)) {
+    return 'packaged-resource';
+  }
+  throw new Error(`the app ran hsetup from ${hsetupExe}, not the packaged resource ${resource} (${resourceBytes} bytes) or its materialized copy under ${cacheRoot}`);
+}

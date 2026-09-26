@@ -50,6 +50,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
+      "minimumSystemVersion": "13.0",
       "dmg": {
         "background": "./dmg/dmg-background.png",
         "windowSize": {

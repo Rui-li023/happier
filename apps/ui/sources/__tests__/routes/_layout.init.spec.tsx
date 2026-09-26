@@ -361,6 +361,10 @@ vi.mock('@/components/ui/layout/StatusBarProvider', () => ({
     StatusBarProvider: () => null,
 }));
 
+vi.mock('@/updates/UpdateFactsBackgroundRuntime', () => ({
+    UpdateFactsBackgroundRuntime: () => null,
+}));
+
 // The root layout's Updates summary host; its classification has its own owner tests.
 vi.mock('@/updates/useUpdatesSummary', () => ({
     UpdatesSummaryProvider: ({ children }: { children: React.ReactNode }) => children,

@@ -5,11 +5,13 @@
  *   apps/ui/src-tauri/icons/tray/tray-template.png — macOS menu-bar template: black bag with
  *     the smile knocked out (transparent). 36×36 px because tray-icon draws the status-item
  *     image 18 pt tall, so this is its @2x; the glyph is 32 px (16 pt) with 2 px padding.
- *   apps/ui/src-tauri/icons/tray/tray.png — Windows/Linux: full-colour mark (gradient bag,
- *     white smile), 32×32 px full bleed, so edges stay pixel-aligned at 16 and 24 px.
+ *   apps/ui/src-tauri/icons/tray/tray.png — Windows/Linux light trays: full-colour mark
+ *     (gradient bag, white smile), 32×32 px full bleed, so edges stay pixel-aligned at 16 and 24 px.
+ *   apps/ui/src-tauri/icons/tray/tray-dark.png — Windows/Linux dark trays: the template glyph in
+ *     white (smile knocked out), 32×32 px full bleed. The dark bag vanishes on a dark tray.
  *
  * Each PNG is rasterized directly at its final size (librsvg via the repo's `sharp`), no
- * resampling. `apps/ui/src-tauri/src/tray.rs` embeds both with `tauri::include_image!`.
+ * resampling. `apps/ui/src-tauri/src/tray.rs` embeds them with `tauri::include_image!`.
  *
  * Regenerate with:  node scripts/generateTrayIcons.mjs
  */
@@ -55,12 +57,15 @@ async function main() {
   const bag = pathData(bagSvg, 'HappierBag.svg');
   const smile = pathData(smileSvg, 'HappierSmile.svg');
 
-  const template = frame({
-    canvasPx: 36,
+  const knockout = `<mask id="knockout" maskUnits="userSpaceOnUse" x="-10" y="-10" width="110" height="110"><rect x="-10" y="-10" width="110" height="110" fill="#fff"/><path fill="#000" d="${smile}"/></mask>`;
+  const silhouette = (fill, canvasPx) => frame({
+    canvasPx,
     glyphPx: 32,
-    defs: `<mask id="knockout" maskUnits="userSpaceOnUse" x="-10" y="-10" width="110" height="110"><rect x="-10" y="-10" width="110" height="110" fill="#fff"/><path fill="#000" d="${smile}"/></mask>`,
-    body: `<path fill="#000" mask="url(#knockout)" d="${bag}"/>`,
+    defs: knockout,
+    body: `<path fill="${fill}" mask="url(#knockout)" d="${bag}"/>`,
   });
+  const template = silhouette('#000', 36);
+  const dark = silhouette('#FFF', 32);
   const colour = frame({
     canvasPx: 32,
     glyphPx: 32,
@@ -69,7 +74,7 @@ async function main() {
   });
 
   const sharp = createRequire(path.join(repoRoot, 'package.json'))('sharp');
-  for (const [file, svg] of [['tray-template.png', template], ['tray.png', colour]]) {
+  for (const [file, svg] of [['tray-template.png', template], ['tray.png', colour], ['tray-dark.png', dark]]) {
     const out = path.join(iconsDir, 'tray', file);
     // include_image! needs 8-bit RGBA.
     await sharp(Buffer.from(svg)).ensureAlpha().png({ compressionLevel: 9 }).toFile(out);

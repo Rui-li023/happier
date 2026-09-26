@@ -140,14 +140,25 @@ node scripts/release/release-assets-e2e/desktop-setup.mjs --desktop-artifact <de
   (`PREDECESSOR_SETUP_PARAMS_BY_DESKTOP_TAG` in `desktop-setup-driver.mjs`; 0.2.12 sent
   `{ surface: 'desktop.ui', target: 'thisComputer' }`). A baseline not listed there is reported
   BLOCKED instead of being driven with another version's contract.
-- Requires an x86_64 Linux Docker host (Linux desktop artifacts ship for x86_64 only). The suite is
-  registered (`registry.mjs`, 10-minute budget) in the `integrated` and `stable` profiles and is
-  selected when `release-verify.yml` receives `candidate_desktop_run_id` (a build-tauri run whose
-  `tauri-updates-linux-x86_64` artifact holds the `.deb`) together with `candidate_cli_version`,
-  for a **production** (stable) candidate only: the upgrade scenario's pinned predecessor exists
-  only there. For a preview/dev candidate the plan reports `skipped desktop-setup (no pinned
-  <channel> predecessor for the upgrade scenario)` instead of selecting a run that could only
-  BLOCK (an explicit `include_validation_suites` still runs it). `release-verify` stages that `.deb` into its own run and `tests.yml` job `desktop-setup` runs the
-  suite on `ubuntu-latest`; a selected job without both inputs fails rather than reporting a suite
-  that never ran. `release.yml` and `nightly-dev.yml` build the desktop after release verification,
-  so neither passes a desktop candidate yet.
+- Requires an x86_64 Linux Docker host (Linux desktop artifacts ship for x86_64 only). The suite
+  gates the desktop build, not release verification: `build-tauri.yml` job `desktop_setup` runs it
+  on `ubuntu-latest` against the just-finalized `tauri-updates-linux-x86_64` `.deb`, and
+  `publish_stable_release` needs it. The registry (`resolve-validation-plan.mjs --suite
+  desktop-setup`; `registry.mjs` `resolveReleaseValidationSuiteApplicability` and
+  `resolveDesktopSetupCliSource`) decides both whether it runs and which CLI it installs:
+  - it runs only for a **production** build, because the upgrade scenario's pinned predecessor
+    exists only there; otherwise the job succeeds with a `desktop-setup skipped` notice naming the
+    reason (`no pinned <channel> predecessor for the upgrade scenario`);
+  - the CLI is the release's candidate `cli-v<candidate_cli_version>` (forwarded by `release.yml`
+    → `promote-ui.yml`, and `nightly-dev.yml`); a desktop-only release (no CLI candidate) installs
+    the published `cli-stable` instead, pinned once to its immutable `cli-v<version>`
+    (`--cli-channel stable`; the resolved tag is recorded in `summary.json`), which is what users
+    of that desktop would get.
+  The suite step's hard stop is twice the registry's 10-minute budget; the executor warns past the
+  budget. No release-verification profile lists the suite, so `include_validation_suites` /
+  `waive_validation_suites` refuse it and a release runs it once.
+- **Explicit exception: `retry_version`.** A production `build-tauri.yml` run with `retry_version`
+  re-promotes an existing immutable `ui-desktop-v<version>` release to the stable feed without
+  rebuilding, and does not run the gate. Re-promoting previously released bytes is a recovery
+  operation (`docs/release-process.md`), not a new publication; those bytes were gated when
+  `publish_stable_release` first published them.

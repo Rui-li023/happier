@@ -189,6 +189,10 @@ export class ClaudeUnifiedDialogChoiceBroker {
     return this.unresolvedTerminalAnswerIdentity === getClaudeUnifiedDialogIdentity(dialog);
   }
 
+  noteTerminalAnswerStarted(dialog: ClaudeUnifiedVisibleDialog): void {
+    this.unresolvedTerminalAnswerIdentity = getClaudeUnifiedDialogIdentity(dialog);
+  }
+
   noteTerminalAnswerFailed(dialog: ClaudeUnifiedVisibleDialog): void {
     const identity = getClaudeUnifiedDialogIdentity(dialog);
     this.unresolvedTerminalAnswerIdentity = identity;
@@ -249,6 +253,9 @@ export class ClaudeUnifiedDialogChoiceBroker {
       if (this.pendingChoice?.requestId !== requestId) {
         throw new Error('claude_unified_dialog_choice_no_longer_live');
       }
+      // A recorded approval is not yet an applied terminal answer. Keep readiness
+      // paused across the handoff to the terminal control task.
+      this.noteTerminalAnswerStarted(params.dialog);
       return decision;
     }).finally(() => {
       if (this.pendingChoice?.requestId === requestId) {

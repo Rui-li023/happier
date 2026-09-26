@@ -1567,6 +1567,7 @@ export class ApiSessionClient extends EventEmitter {
         const hadMaterializedLocalId = this.hasMaterializedLocalId(localId);
         if (didClear || hadMaterializedLocalId) {
             this.deleteMaterializedLocalId(localId);
+            this.publishPendingEligibilityWake();
         }
         return didClear || hadMaterializedLocalId;
     }
@@ -1929,12 +1930,10 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     private async reconcileCanonicalPendingDeliveriesBeforeMaterialization(): Promise<boolean> {
-        const blockingLocalIds = [...this.canonicalPendingDeliveryByLocalId.keys()]
-            .filter((localId) => (
-                this.providerInputTerminalOutcomeByLocalId.get(localId) === 'accepted'
-                || !this.serverBlockedCanonicalPendingDeliveryLocalIds.has(localId)
-            ));
-        if (blockingLocalIds.length === 0) return true;
+        // Blocked delivery can still own an ambiguous terminal attempt. Reconcile its exact
+        // server identity too, so manual handling retires that custody without inventing acceptance.
+        const claimedLocalIds = [...this.canonicalPendingDeliveryByLocalId.keys()];
+        if (claimedLocalIds.length === 0) return true;
 
         try {
             const statuses = await listPendingQueueV2DeliveryStatusesFromServer({
@@ -1942,7 +1941,7 @@ export class ApiSessionClient extends EventEmitter {
                 sessionId: this.sessionId,
             });
             const statusByLocalId = new Map(statuses.map((entry) => [entry.localId, entry.status]));
-            for (const localId of blockingLocalIds) {
+            for (const localId of claimedLocalIds) {
                 const status = statusByLocalId.get(localId);
                 // While exact provider acceptance is actively settling, it is stronger evidence
                 // than an absent/archived Pending projection. Once that operation finishes, the
@@ -1964,7 +1963,7 @@ export class ApiSessionClient extends EventEmitter {
         } catch (error) {
             logger.debug('[pendingQueue] exact local provider custody reconciliation failed closed', {
                 sessionId: this.sessionId,
-                localIds: blockingLocalIds,
+                localIds: claimedLocalIds,
                 error: serializeAxiosErrorForLog(error),
             });
         }

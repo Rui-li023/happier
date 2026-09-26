@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
@@ -26,6 +26,8 @@ import { readInstalledVersionMarkers, writeInstalledVersionMarker } from './vers
  */
 export type InstalledPayloadStateSnapshot = Readonly<{
   layout: FirstPartyInstallLayout;
+  /** This transaction's own set-aside directory; nothing else writes or removes it. */
+  setAsideDir: string;
   currentVersionId: string | null;
   previousVersionId: string | null;
   shims: ReadonlyArray<Readonly<{ shimPath: string; setAsidePath: string | null }>>;
@@ -37,11 +39,20 @@ async function pathExists(path: string): Promise<boolean> {
   return await lstat(path).then(() => true).catch(() => false);
 }
 
-/** Where moved-aside shims wait for commit or restore: inside the shim dir, off `PATH` itself. */
-function resolveShimSetAsideDir(layout: FirstPartyInstallLayout): string {
-  return joinPathForPathShape(layout.shimDir, '.update-rollback');
+/**
+ * Where one transaction's moved-aside shims wait for commit or restore: its own directory under the
+ * shim dir (off `PATH` itself), so no other transaction — another channel's, or a later one after a
+ * crash — can touch its recovery launchers.
+ */
+function resolveShimSetAsideDir(layout: FirstPartyInstallLayout, transactionId: string): string {
+  return joinPathForPathShape(layout.shimDir, '.update-rollback', transactionId);
 }
 
+/**
+ * Capture before activating. The caller holds the home-wide activation lock. If moving any shim
+ * aside fails, every shim already moved is put back before the error is rethrown, so a failed
+ * capture leaves the launchers exactly as they were.
+ */
 export async function captureInstalledPayloadStateForActivation(params: Readonly<{
   componentId: FirstPartyComponentId;
   channel: PublicReleaseRingId;
@@ -64,22 +75,34 @@ export async function captureInstalledPayloadStateForActivation(params: Readonly
       processEnv: params.processEnv,
     }),
   });
-  const setAsideDir = resolveShimSetAsideDir(layout);
-  await discardSetAsideShims(setAsideDir);
+  const setAsideDir = resolveShimSetAsideDir(layout, randomUUID());
 
   const shims: Array<Readonly<{ shimPath: string; setAsidePath: string | null }>> = [];
-  for (const { shimPath } of targets) {
-    if (!(await pathExists(shimPath))) {
-      shims.push({ shimPath, setAsidePath: null });
-      continue;
+  try {
+    for (const { shimPath } of targets) {
+      if (!(await pathExists(shimPath))) {
+        shims.push({ shimPath, setAsidePath: null });
+        continue;
+      }
+      await mkdir(setAsideDir, { recursive: true });
+      const setAsidePath = joinPathForPathShape(setAsideDir, basename(shimPath));
+      await rename(shimPath, setAsidePath);
+      shims.push({ shimPath, setAsidePath });
     }
-    await mkdir(setAsideDir, { recursive: true });
-    const setAsidePath = joinPathForPathShape(setAsideDir, `${basename(shimPath)}.${randomUUID()}`);
-    await rename(shimPath, setAsidePath);
-    shims.push({ shimPath, setAsidePath });
+  } catch (error) {
+    const putBackFailures: unknown[] = [];
+    for (const { shimPath, setAsidePath } of shims) {
+      if (!setAsidePath) continue;
+      await rename(setAsidePath, shimPath).catch((putBackError: unknown) => { putBackFailures.push(putBackError); });
+    }
+    if (putBackFailures.length === 0) {
+      await rm(setAsideDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+    throw new AggregateError([error, ...putBackFailures], `Could not set the Happier commands aside, nor put them all back; the rest are in ${setAsideDir}.`);
   }
 
-  return { layout, currentVersionId, previousVersionId, shims, defaultReleaseChannelStatePath, defaultReleaseChannelState };
+  return { layout, setAsideDir, currentVersionId, previousVersionId, shims, defaultReleaseChannelStatePath, defaultReleaseChannelState };
 }
 
 async function restoreVersionPointer(layout: FirstPartyInstallLayout, pointerPath: string, versionId: string | null): Promise<void> {
@@ -119,8 +142,8 @@ export async function restoreInstalledPayloadState(snapshot: InstalledPayloadSta
     await attempt(async () => {
       if (await pathExists(shimPath)) {
         // The activated shim may be running (the new daemon); move it aside too instead of deleting.
-        await mkdir(resolveShimSetAsideDir(layout), { recursive: true });
-        await rename(shimPath, joinPathForPathShape(resolveShimSetAsideDir(layout), `${basename(shimPath)}.${randomUUID()}`));
+        await mkdir(snapshot.setAsideDir, { recursive: true });
+        await rename(shimPath, joinPathForPathShape(snapshot.setAsideDir, `${basename(shimPath)}.activated-${randomUUID()}`));
       }
       if (setAsidePath) {
         await mkdir(dirname(shimPath), { recursive: true });
@@ -142,14 +165,11 @@ export async function restoreInstalledPayloadState(snapshot: InstalledPayloadSta
   }
 }
 
-/** Commit: the moved-aside shims are no longer needed. Best-effort — one still running stays until next time. */
+/**
+ * Commit, or after a completed restore: this transaction's set-aside launchers are no longer
+ * needed. Best-effort — a Windows `.exe` still running stays until it exits; nothing else is
+ * touched.
+ */
 export async function discardInstalledPayloadStateSnapshot(snapshot: InstalledPayloadStateSnapshot): Promise<void> {
-  await discardSetAsideShims(resolveShimSetAsideDir(snapshot.layout));
-}
-
-async function discardSetAsideShims(setAsideDir: string): Promise<void> {
-  const entries = await readdir(setAsideDir).catch(() => [] as string[]);
-  for (const entry of entries) {
-    await rm(joinPathForPathShape(setAsideDir, entry), { force: true, recursive: true }).catch(() => undefined);
-  }
+  await rm(snapshot.setAsideDir, { recursive: true, force: true }).catch(() => undefined);
 }

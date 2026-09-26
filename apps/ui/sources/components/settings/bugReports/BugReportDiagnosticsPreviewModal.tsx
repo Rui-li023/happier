@@ -69,6 +69,7 @@ function formatBytes(bytes: number): string {
 
 export function BugReportDiagnosticsPreviewModal(props: Readonly<{
   artifacts: BugReportDiagnosticsPreviewArtifact[];
+  onExport?: () => Promise<void>;
 }> & CustomModalInjectedProps): React.JSX.Element {
   const { theme } = useUnistyles();
   const s = styles;
@@ -117,6 +118,20 @@ export function BugReportDiagnosticsPreviewModal(props: Readonly<{
             <Text style={s.helper}>
               {t('bugReports.composer.diagnostics.preview.helper')}
             </Text>
+
+            {props.onExport ? (
+              <Pressable
+                style={s.row}
+                onPress={() => {
+                  void props.onExport?.();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={t('common.saveAs')}
+              >
+                <Text style={s.filename}>{t('common.saveAs')}</Text>
+                <Text style={s.meta}>{t('bugReports.composer.diagnostics.preview.title')}</Text>
+              </Pressable>
+            ) : null}
 
             <View style={s.list}>
               {props.artifacts.length === 0 ? (

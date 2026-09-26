@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { isLatestVersionCheckDue } from '@/updates/latestVersionCheckFreshness';
 import {
     machineCapabilitiesDetect,
     type MachineCapabilitiesDetectResult,
@@ -191,7 +192,14 @@ function withDurableAgentLatestVersion(next: CapabilityDetectResult, prev: Capab
 /** A `cli.<agent>` request asking for the latest version is unmet by a cached result without it. */
 function isAgentLatestVersionMissing(results: Partial<Record<CapabilityId, CapabilityDetectResult>>, capabilityId: string): boolean {
     const result = results[capabilityId as CapabilityId];
-    if (!result || !result.ok || !isPlainObject(result.data)) return true;
+    if (!result) return true;
+    // An errored probe was checked and failed: it is asked again on the failure cadence of the
+    // shared latest-version policy, not on every Updates request.
+    if (!result.ok) {
+        const checkedAt = typeof result.checkedAt === 'number' ? result.checkedAt : 0;
+        return checkedAt <= 0 || isLatestVersionCheckDue({ checkedAt, ok: false, now: Date.now() });
+    }
+    if (!isPlainObject(result.data)) return true;
     // A daemon that predates K6 never answers it; asking again would not change the answer.
     if (typeof result.data.updateSupported !== 'boolean') return false;
     return !Object.prototype.hasOwnProperty.call(result.data, 'latestVersion');

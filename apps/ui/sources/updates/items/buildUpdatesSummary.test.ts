@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildUpdatesSummary, planUpdateAll } from './buildUpdatesSummary';
+import { buildUpdatesSummary, isSameUpdatesSummary, planUpdateAll } from './buildUpdatesSummary';
 import type { UpdateItem } from './updateItem';
 
 function item(overrides: Partial<UpdateItem> & Pick<UpdateItem, 'id'>): UpdateItem {
@@ -70,6 +70,19 @@ describe('buildUpdatesSummary — completion not yet seen', () => {
         const pending = new Map([['m2:cli', 'pendingRemote' as const]]);
         expect(buildUpdatesSummary([item({ id: 'm2:cli', state: 'running', step: 'reconnecting' })], pending).phase).toBe('running');
         expect(buildUpdatesSummary([item({ id: 'm2:cli', state: 'upToDate' })], pending).phase).toBe('completed');
+    });
+});
+
+describe('isSameUpdatesSummary', () => {
+    it('compares every field, so a change in the failed or running count reaches the entries', () => {
+        const a = buildUpdatesSummary([item({ id: 'f', state: 'failed', action: { kind: 'run', verb: 'retry' } })]);
+        const b = buildUpdatesSummary([
+            item({ id: 'f', state: 'failed', action: { kind: 'run', verb: 'retry' } }),
+            item({ id: 'g', state: 'failed', action: { kind: 'run', verb: 'retry' } }),
+        ]);
+        expect(a.phase).toBe(b.phase);
+        expect(isSameUpdatesSummary(a, b)).toBe(false);
+        expect(isSameUpdatesSummary(a, buildUpdatesSummary([item({ id: 'f', state: 'failed', action: { kind: 'run', verb: 'retry' } })]))).toBe(true);
     });
 });
 

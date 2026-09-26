@@ -8,6 +8,7 @@ import { createClaudeProviderRuntimeActivityAdapter } from '../providerActivity/
 import type { ClaudeWorkflowTaskReference } from '../workflows/claudeWorkflowTaskReference';
 import type { SessionHookData } from '../utils/startHookServer';
 import { createClaudeUnifiedHookLifecycleBridge } from './createClaudeUnifiedHookLifecycleBridge';
+import { TERMINAL_INPUT_QUIET_PERIOD_MS } from '@/agent/runtime/terminal/injection/arbiter';
 
 describe('createClaudeUnifiedHookLifecycleBridge', () => {
   it('emits no target Activity truth when the unified bridge is disposed', async () => {
@@ -58,12 +59,18 @@ describe('createClaudeUnifiedHookLifecycleBridge', () => {
       onReady,
     });
 
-    await bridge.settleAttemptLocalCommandCompleted();
+    try {
+      await bridge.settleAttemptLocalCommandCompleted();
 
-    expect(onThinkingChange).toHaveBeenCalledWith(false);
-    expect(onReady).toHaveBeenCalledTimes(1);
-    expect(observeLifecycle).toHaveBeenCalledWith({ type: 'turn_state', state: 'idle' });
-    expect(observeLifecycle).toHaveBeenCalledWith({ type: 'output' });
+      expect(onThinkingChange).toHaveBeenCalledWith(false);
+      expect(onReady).toHaveBeenCalledTimes(1);
+      expect(observeLifecycle).toHaveBeenCalledWith({ type: 'turn_state', state: 'idle' });
+      expect(observeLifecycle).toHaveBeenCalledWith({ type: 'output' });
+      expect(drainWhenSafe).toHaveBeenCalledTimes(1);
+    } finally {
+      bridge.dispose();
+    }
+    await new Promise((resolve) => setTimeout(resolve, TERMINAL_INPUT_QUIET_PERIOD_MS + 20));
     expect(drainWhenSafe).toHaveBeenCalledTimes(1);
   });
 

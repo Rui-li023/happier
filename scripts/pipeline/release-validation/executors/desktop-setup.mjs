@@ -21,18 +21,21 @@ const DEFAULT_LOCAL_CLI_ASSETS_DIR = ['dist', 'release-assets', 'cli'];
  * @param {{ repoRoot: string; source: ReleaseValidationSource | null }} params
  */
 function resolveCliArgs({ repoRoot, source }) {
-  if (!source) throw new Error('desktop-setup requires --source published-tag --ref cli-v<version> or --source local-build --ref <cli release assets dir>');
+  if (!source) throw new Error('desktop-setup requires --source published-tag --ref cli-v<version>, --source published-channel --ref <channel> or --source local-build --ref <cli release assets dir>');
   if (source.kind === 'published-tag') {
     if (!/^cli-v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(source.ref)) {
       throw new Error(`desktop-setup published-tag sources must be immutable cli-v<version> tags (got ${source.ref})`);
     }
     return ['--cli-tag', source.ref];
   }
+  // A desktop-only release: the channel's published CLI, pinned once by the suite to its
+  // immutable cli-v<version> (recorded in summary.json).
+  if (source.kind === 'published-channel') return ['--cli-channel', source.ref];
   if (source.kind === 'local-build') {
     const dir = source.ref === '.' ? resolve(repoRoot, ...DEFAULT_LOCAL_CLI_ASSETS_DIR) : resolve(repoRoot, source.ref);
     return ['--cli-assets-dir', dir];
   }
-  throw new Error(`desktop-setup supports --source published-tag or local-build (got ${source.kind})`);
+  throw new Error(`desktop-setup supports --source published-tag, published-channel or local-build (got ${source.kind})`);
 }
 
 /**

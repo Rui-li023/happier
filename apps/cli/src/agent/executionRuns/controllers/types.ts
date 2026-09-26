@@ -16,6 +16,8 @@ export type ExecutionRunBackendController = {
   backendSupportsResume: boolean;
   childSessionId: SessionId | null;
   buffer: string;
+  /** Provider-scoped cumulative snapshot state for the current assistant segment. */
+  modelOutputSegmentSnapshot?: string;
   sidechainStreamBuffer: string;
   sidechainStreamKey: string;
   streamWriter: StreamedTranscriptWriter | null;
@@ -53,6 +55,13 @@ export type ExecutionRunVoiceAgentController = {
 };
 
 export type ExecutionRunController = ExecutionRunBackendController | ExecutionRunVoiceAgentController;
+
+export function resetExecutionRunBackendOutput(ctrl: ExecutionRunBackendController): void {
+  ctrl.buffer = '';
+  ctrl.modelOutputSegmentSnapshot = undefined;
+  ctrl.sidechainStreamBuffer = '';
+  ctrl.sidechainStreamKey = '';
+}
 
 export function readBackendChildSessionId(ctrl: ExecutionRunController | null): SessionId | null {
   if (!ctrl) return null;

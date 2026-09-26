@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs';
 import type { CliInstallSource, CliUpdateFacts } from '@happier-dev/protocol';
 import {
   describeHappierCliOrigin,
+  type HappierCliOrigin,
   readInstalledVersionMarkersSync,
   readLastCliUpdateResult,
   resolveFirstPartyInstallLayout,
@@ -49,14 +50,40 @@ function resolveRunningCliInstallSource(params: Readonly<{
   if (currentVersionId && comparablePath(params.execPath, params.platform).startsWith(versionsDir)) {
     return { installSource: 'managed', packageManagerCommand: null };
   }
+  const origin = resolveRunningCliPackageManagerOrigin(params);
+  return origin
+    ? { installSource: origin.kind, packageManagerCommand: origin.updateCommand }
+    : { installSource: 'other', packageManagerCommand: null };
+}
+
+/** This CLI's Homebrew formulae: `happier`, and its versioned/channel variants (`happier@preview`). */
+function isHappierHomebrewFormula(formula: string): boolean {
+  return /^happier(?:@[a-z0-9][a-z0-9.-]*)?$/u.test(formula);
+}
+
+/**
+ * The package manager (npm, Homebrew) that owns the running CLI, or `null`. Both the invoked path
+ * and the executable are read: a Bun-compiled `happier` reports `argv[1]` as its embedded bundle
+ * (`/$bunfs/root/happier`), so only `execPath` — the resolved executable inside a Homebrew keg —
+ * names where it was installed, while an npm install is named by the script node runs.
+ */
+export function resolveRunningCliPackageManagerOrigin(params: Readonly<{
+  invokedPath: string;
+  execPath: string;
+  npmPackageName: string;
+}>): Extract<HappierCliOrigin, { kind: 'npm' | 'brew' }> | null {
   for (const candidate of [params.invokedPath, params.execPath]) {
     const origin = describeHappierCliOrigin(candidate);
-    // An npm origin counts only when the package is this CLI (not whatever module launched it).
-    if (origin.kind === 'brew' || (origin.kind === 'npm' && origin.packageName === params.npmPackageName)) {
-      return { installSource: origin.kind, packageManagerCommand: origin.updateCommand };
+    // An origin counts only when it is this CLI's own: its npm package, or a keg of its formula
+    // (not whatever launched it, e.g. Homebrew's Node at `Cellar/node/<version>/bin/node`).
+    if (
+      (origin.kind === 'brew' && isHappierHomebrewFormula(origin.formula))
+      || (origin.kind === 'npm' && origin.packageName === params.npmPackageName)
+    ) {
+      return origin;
     }
   }
-  return { installSource: 'other', packageManagerCommand: null };
+  return null;
 }
 
 /**
@@ -100,6 +127,14 @@ export function readCliUpdateFacts(params: Readonly<{
   };
 }
 
+/** The npm package this CLI is published as (the update-package override, else its own name). */
+export function resolveThisCliNpmPackageName(): string {
+  return resolveNpmPackageNameOverride({
+    envValue: process.env.HAPPIER_CLI_UPDATE_PACKAGE_NAME,
+    fallback: String(packageJson.name ?? '').trim(),
+  });
+}
+
 /** The running CLI's own K5 facts. */
 export function readCliUpdateFactsForThisCli(): CliUpdateFacts {
   return readCliUpdateFacts({
@@ -109,9 +144,6 @@ export function readCliUpdateFactsForThisCli(): CliUpdateFacts {
     execPath: process.execPath,
     invokedPath: process.argv[1] ?? process.execPath,
     platform: process.platform,
-    npmPackageName: resolveNpmPackageNameOverride({
-      envValue: process.env.HAPPIER_CLI_UPDATE_PACKAGE_NAME,
-      fallback: String(packageJson.name ?? '').trim(),
-    }),
+    npmPackageName: resolveThisCliNpmPackageName(),
   });
 }

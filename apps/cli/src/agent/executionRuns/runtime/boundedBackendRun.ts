@@ -2,7 +2,7 @@ import { resolveExecutionRunIntentProfile } from '@/agent/executionRuns/profiles
 import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 import type { AcpSendFn } from '@/agent/acp/bridge/acpSessionForwarding';
 import type { ExecutionRunManagerStartParams } from '@/agent/executionRuns/runtime/executionRunTypes';
-import type { ExecutionRunController, ExecutionRunBackendController } from '@/agent/executionRuns/controllers/types';
+import { resetExecutionRunBackendOutput, type ExecutionRunController, type ExecutionRunBackendController } from '@/agent/executionRuns/controllers/types';
 import type { FinishExecutionRun } from '@/agent/executionRuns/runtime/executionRunFinishRun';
 import { isAbortLikeError, normalizeExecutionRunSendDelivery, resolveInFlightDeliveryAction } from '@/agent/executionRuns/runtime/turnDelivery';
 import { resolveExecutionRunRuntimeBackendId } from '@/agent/executionRuns/runtime/backendTargets';
@@ -98,9 +98,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
       backendCtrl.turnCount += 1;
       backendCtrl.turnEpoch += 1;
       backendCtrl.turnInFlight = true;
-      backendCtrl.buffer = '';
-      backendCtrl.sidechainStreamBuffer = '';
-      backendCtrl.sidechainStreamKey = '';
+      resetExecutionRunBackendOutput(backendCtrl);
       return backendCtrl.backend.sendPrompt(backendCtrl.childSessionId!, turnPrompt);
     }
 
@@ -371,9 +369,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
       })();
 
       // Reset buffers so the second pass is parsed deterministically.
-      backendCtrl.buffer = '';
-      backendCtrl.sidechainStreamBuffer = '';
-      backendCtrl.sidechainStreamKey = '';
+      resetExecutionRunBackendOutput(backendCtrl);
       backendCtrl.turnInFlight = false;
 
       await runTurnWithExternalMessages(repairPrompt);

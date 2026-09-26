@@ -800,6 +800,31 @@ describe('useMachineCapabilitiesCache (hook)', () => {
         });
     });
 
+    it('an errored agent probe counts as checked: an Updates request does not refetch it until the failure retry is due', async () => {
+        vi.resetModules();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-09-25T10:00:00Z'));
+        const machineCapabilitiesDetect = vi.fn(async () => ({
+            supported: true,
+            response: {
+                protocolVersion: 1,
+                results: { 'cli.claude': { ok: false, checkedAt: Date.now(), error: { message: 'probe failed' } } },
+            },
+        }));
+        vi.doMock('@/sync/ops', () => ({ machineCapabilitiesDetect }));
+        const { prefetchMachineCapabilitiesIfStale } = await import('./useMachineCapabilitiesCache');
+        const updatesRequest: CapabilitiesDetectRequest = { requests: [{ id: 'cli.claude', params: { includeLatestVersion: true } }] };
+
+        await prefetchMachineCapabilitiesIfStale({ machineId: 'm-err', staleMs: 24 * 60 * 60 * 1000, request: updatesRequest, timeoutMs: 1 });
+        await prefetchMachineCapabilitiesIfStale({ machineId: 'm-err', staleMs: 24 * 60 * 60 * 1000, request: updatesRequest, timeoutMs: 1 });
+        expect(machineCapabilitiesDetect).toHaveBeenCalledTimes(1);
+
+        vi.setSystemTime(new Date('2026-09-25T10:31:00Z'));
+        await prefetchMachineCapabilitiesIfStale({ machineId: 'm-err', staleMs: 24 * 60 * 60 * 1000, request: updatesRequest, timeoutMs: 1 });
+        expect(machineCapabilitiesDetect).toHaveBeenCalledTimes(2);
+        vi.useRealTimers();
+    });
+
     it('keeps an agent CLI latest version (K6) through a later detect that did not ask for it, and refetches when Updates needs it', async () => {
         vi.resetModules();
         let includeLatestServed = true;

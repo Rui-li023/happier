@@ -46,7 +46,7 @@ import {
   type ClaudeGoalRuntimeControls,
 } from '../goalControl/claudeGoalRuntimeControl';
 import { buildClaudeGoalCommand } from '../goalControl/claudeGoalCommand';
-import { createClaudeUnifiedPendingQueuePump } from './createClaudeUnifiedPendingQueuePump';
+import { createClaudeUnifiedPendingQueuePump, type ClaudeUnifiedPendingDeliveryState } from './createClaudeUnifiedPendingQueuePump';
 import {
   createClaudeUnifiedPromptInjector,
   type ClaudeUnifiedDraftGuardStarvationInfo,
@@ -338,6 +338,7 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
   /** Canonical session-turn lifecycle probe for the arbiter's stale-turn recovery (Lane N2). */
   isCanonicalTurnActive?: (() => boolean) | undefined;
   /** Canonical Pending delivery-state probe used to reconcile ambiguous terminal custody. */
+  pendingDeliveryState?: ClaudeUnifiedPendingDeliveryState;
   resolvePromptDeliveryState?: ((batch: ClaudeUnifiedPromptBatch<Mode>) => import('./_types').ClaudeUnifiedPromptDeliveryState) | undefined;
   /**
    * Lane P (O-design Seam A): de-duplicated session-level steer availability tee from the steer
@@ -453,6 +454,7 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
       | Readonly<{ action: 'surfaced_runtime_issue' }>
     >
   ) | undefined;
+  /** Exact host ownership is ready; provider initialization and composer readiness may still be pending. */
   onTerminalHostReady?: ((params: Readonly<{
     handle: TerminalHostHandle;
     terminal: NonNullable<Metadata['terminal']>;
@@ -460,8 +462,8 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
   }>) => void | Promise<void>) | undefined;
   /**
    * Publishes the exact host attachment as soon as the host owner has created and persisted it.
-   * This is intentionally separate from onTerminalHostReady, whose callback may be delayed until
-   * the controller has initialized (or never run on a startup failure).
+   * The exact-host callback runs first so a user can stop this attachment even while metadata
+   * publication or provider initialization is still pending.
    */
   publishTerminalHostMetadata?: ((terminal: NonNullable<Metadata['terminal']>) => void | Promise<void>) | undefined;
   persistTerminalHostAttachmentInfo?: ((params: Readonly<{
@@ -1416,6 +1418,12 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       persist: opts.persistTerminalHostAttachmentInfo ?? persistDefaultTerminalHostAttachmentInfo,
     });
     if (terminalAttachment) {
+      await opts.onTerminalHostReady?.({
+        handle: activeHandle,
+        terminal: terminalAttachment,
+        destroyOwnedHostForExplicitStop,
+      });
+      if (opts.signal?.aborted || processSignalAbortController.signal.aborted) return;
       await opts.publishTerminalHostMetadata?.(terminalAttachment);
     } else {
       logger.debug('[unified]: terminal host metadata publication skipped; attachment identity unavailable', {
@@ -1425,7 +1433,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
         attachmentId: activeHandle.attachmentId,
       });
     }
-    if (processSignalAbortController.signal.aborted) {
+    if (opts.signal?.aborted || processSignalAbortController.signal.aborted) {
       return;
     }
 
@@ -1981,6 +1989,9 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             turnStateAtInjection: acceptance.turnStateAtInjection,
           });
         },
+        onPromptDeliveryRetired: (batch) => {
+          acceptedPromptTranscriptDiscovery.forgetRetiredPromptByBatch(batch);
+        },
         onPromptAccepted: (batch, acceptance) => {
           acceptedPromptTranscriptDiscovery.consumeAcceptedPromptByBatch({
             message: batch.message,
@@ -1997,6 +2008,19 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
               ? { appliedModelId: batch.mode.model.trim() }
               : {}),
           });
+          // Exact provider acceptance settles Pending custody even when the hook bridge is
+          // unusable. Fail the runtime only after settlement, including evidence received
+          // while the terminal write is still in flight; never invite replay of accepted input.
+          try {
+            assertClaudeUnifiedHookActivationBeforeTranscriptFallback({
+              hookPluginDir: opts.hookPluginDir,
+              hookSubscriptionConfigured: Boolean(opts.subscribeClaudeSessionHooks),
+              trustedHookActivationObserved,
+            });
+          } catch (error) {
+            fatalRuntimeError ??= error;
+            runtimeAbortController.abort(error);
+          }
         },
         // F-1: a batch still inside the arbiter when it is disposed (failed_terminal park,
         // host-death unwind, graceful teardown) must return to the session queue, mirroring
@@ -2150,17 +2174,6 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
           return false;
         }
         acceptedPromptTranscriptDiscovery.reserveAcceptedPromptTranscriptEcho(match);
-        try {
-          assertClaudeUnifiedHookActivationBeforeTranscriptFallback({
-            hookPluginDir: opts.hookPluginDir,
-            hookSubscriptionConfigured: Boolean(opts.subscribeClaudeSessionHooks),
-            trustedHookActivationObserved,
-          });
-        } catch (error) {
-          fatalRuntimeError ??= error;
-          runtimeAbortController.abort(error);
-          return false;
-        }
         const matchKey = buildAcceptedTranscriptMatchKey(match);
         if (pendingAcceptedTranscriptMatchKeys.has(matchKey)) return true;
         pendingAcceptedTranscriptMatchKeys.add(matchKey);
@@ -2189,6 +2202,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       };
       const pendingQueuePump = createClaudeUnifiedPendingQueuePump<Mode>({
         inputConsumer,
+        pendingDeliveryState: opts.pendingDeliveryState,
         arbiter,
         // A batch pulled during the death/dispose unwind must be returned to the
         // owner's queue, never silently dropped into a dead session.
@@ -2394,8 +2408,9 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             loadCommittedClaudeJsonlMessageBaseline: opts.loadCommittedClaudeJsonlMessageBaseline,
             transcriptMissingWarningMs: configuration.claudeTranscriptMissingWarningMs,
             subscribeClaudeSessionHooks: activeHookSubscription.subscribe,
+            // Discover identity without settling Pending ahead of the ordered importer.
             classifyDiscoveredSession: ({ messages }) => (
-              confirmPromptAcceptedFromTranscript(messages) ? 'main' : null
+              acceptedPromptTranscriptDiscovery.findMatchingTranscript(messages) ? 'main' : null
             ),
           })
         : undefined;
@@ -2512,11 +2527,6 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
           logger.debug('[unified]: failed to clear recovered terminal host health marker', error);
         });
       }
-      await opts.onTerminalHostReady?.({
-        handle: activeHandle,
-        terminal: terminalAttachment,
-        destroyOwnedHostForExplicitStop,
-      });
     }
     const waitSignals = [runtimeAbortController.signal, processSignalAbortController.signal];
     if (opts.signal) {

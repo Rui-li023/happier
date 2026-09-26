@@ -102,4 +102,28 @@ describe('BugReportDiagnosticsPreviewModal', () => {
             }),
         );
     });
+    it('exposes an export action for the complete artifact set', async () => {
+        const { BugReportDiagnosticsPreviewModal } = await import('./BugReportDiagnosticsPreviewModal');
+
+        const onExport = vi.fn(async () => {});
+        const screen = await renderScreen(
+            <BugReportDiagnosticsPreviewModal
+                artifacts={[]}
+                onClose={vi.fn()}
+                setChrome={vi.fn()}
+                onExport={onExport}
+            />,
+        );
+
+        const exportButton = screen.find((node) => (
+            node.props?.accessibilityRole === 'button'
+            && String(node.props?.accessibilityLabel ?? '').includes('saveAs')
+        ));
+        act(() => {
+            pressTestInstance(exportButton, 'export diagnostics');
+        });
+        await Promise.resolve();
+        expect(onExport).toHaveBeenCalledTimes(1);
+    });
+
 });

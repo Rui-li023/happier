@@ -1,13 +1,16 @@
-import { compareVersions, parseVersion } from '@/utils/system/versionUtils';
+import { compareVersionsOrNull } from '@/utils/system/versionUtils';
 import type { InstallableDepDataLike } from './installablesRegistry';
 
-export function isInstallableDepUpdateAvailable(data: InstallableDepDataLike | null): boolean {
-    if (!data?.installed) return false;
+/** `null` means the helper's versions cannot be ordered, not that it is current. */
+export function getInstallableDepUpdateAvailability(data: InstallableDepDataLike | null): boolean | null {
+    if (!data?.installed) return null;
     const installed = data.installedVersion;
     const latest = data.latestVersionCheck && data.latestVersionCheck.ok ? data.latestVersionCheck.latestVersion : null;
-    if (!installed || !latest) return false;
-    const installedParsed = parseVersion(installed);
-    const latestParsed = parseVersion(latest);
-    if (!installedParsed || !latestParsed) return false;
-    return compareVersions(installed, latest) < 0;
+    if (!installed || !latest) return null;
+    const comparison = compareVersionsOrNull(installed, latest);
+    return comparison === null ? null : comparison < 0;
+}
+
+export function isInstallableDepUpdateAvailable(data: InstallableDepDataLike | null): boolean {
+    return getInstallableDepUpdateAvailability(data) === true;
 }

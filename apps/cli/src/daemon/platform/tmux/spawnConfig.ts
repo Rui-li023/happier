@@ -1,8 +1,8 @@
 import { buildHappyCliSubprocessLaunchSpec, type HappyCliSubprocessLaunchOptions } from '@/utils/spawnHappyCLI';
 import type { CatalogAgentId } from '@/backends/types';
-import { buildCgroupSelfMigratingHappyCliLaunchSpec } from '../linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
 import { buildSpawnChildProcessEnv, DAEMON_DECIDED_CHILD_ENV_KEYS } from '../../spawn/buildSpawnChildProcessEnv';
 import type { HappierRuntimeServerContext } from '@/utils/env/resolveHappierRuntimeContextEnv';
+import { buildCgroupSelfMigratingHappyCliLaunchSpec } from '../linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
 
 type TmuxSpawnAgentId = CatalogAgentId | 'acp-catalog';
 
@@ -43,6 +43,7 @@ export async function buildTmuxSpawnConfig(params: {
   extraArgs?: string[];
   launchOptions?: HappyCliSubprocessLaunchOptions;
   processEnv?: NodeJS.ProcessEnv;
+  homeDir?: string;
   serverSelectionEnv?: HappierRuntimeServerContext;
 }): Promise<{
   commandTokens: string[];
@@ -62,10 +63,11 @@ export async function buildTmuxSpawnConfig(params: {
   const launchSpec = buildHappyCliSubprocessLaunchSpec(args, params.launchOptions);
   const processEnv = params.processEnv ?? process.env;
   const extraEnv = { ...params.extraEnv, ...(launchSpec.env ?? {}) };
-  // The tmux server's global env can be stale; `-e` cannot unset, so '' stands for absent.
+  // tmux's server environment may be stale; empty values explicitly mask inherited keys.
   const childEnv = buildSpawnChildProcessEnv({
     processEnv,
     extraEnv,
+    homeDir: params.homeDir,
     serverSelectionEnv: params.serverSelectionEnv,
   });
   const daemonDecidedEnv = Object.fromEntries(

@@ -1,11 +1,12 @@
 import { AGENT_IDS, getAgentCore, type AgentId } from '@/agents/catalog/catalog';
 import { buildAgentCliCapabilityId } from '@/capabilities/agentCliCapabilityId';
+import { buildMachineUpdateFactsRequest } from '@/capabilities/requests';
 import { getInstallablesRegistryEntries, type InstallableDepDataLike } from '@/capabilities/installablesRegistry';
 import type { MachineCapabilitiesSnapshot } from '@/hooks/server/useMachineCapabilitiesCache';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 
-import { buildAgentCliUpdateItem, buildInstallableUpdateItem } from './items/buildMachineUpdateItems';
+import { buildAgentCliUpdateItem, buildInstallableUpdateItem, buildProbeFailedItem } from './items/buildMachineUpdateItems';
 import type { UpdateItem } from './items/updateItem';
 import { readCapabilityResultData } from './machineCapabilitySnapshots';
 import { observeMachineUpdateRun, type useMachineUpdateRuns } from './machineUpdateRuns';
@@ -37,6 +38,18 @@ function buildMachineRows(params: Readonly<{
 }>): UpdateItem[] {
     const rows: UpdateItem[] = [];
     for (const agentId of AGENT_IDS) {
+        const capabilityId = buildAgentCliCapabilityId(agentId);
+        if (isProbeFailed(params.snapshot, capabilityId)) {
+            // The probe itself failed: nothing is known about this agent here — "Couldn't check",
+            // never "up to date" (retried on the failure cadence by the cache owner).
+            rows.push(buildProbeFailedItem({
+                machineId: params.machineId,
+                subject: { kind: 'agent-cli', agentId },
+                title: t(getAgentCore(agentId as AgentId).displayNameKey),
+                online: params.online,
+            }));
+            continue;
+        }
         const row = buildAgentCliUpdateItem({
             machineId: params.machineId,
             agentId,
@@ -48,6 +61,16 @@ function buildMachineRows(params: Readonly<{
         if (row) rows.push(row);
     }
     for (const entry of params.installables) {
+        if (isProbeFailed(params.snapshot, entry.capabilityId)) {
+            // Same for a helper: a failed check is listed as "Couldn't check", it never vanishes.
+            rows.push(buildProbeFailedItem({
+                machineId: params.machineId,
+                subject: { kind: 'installable', key: entry.key },
+                title: entry.title,
+                online: params.online,
+            }));
+            continue;
+        }
         const row = buildInstallableUpdateItem({
             machineId: params.machineId,
             installableKey: entry.key,
@@ -75,7 +98,7 @@ export function buildMachineUpdateGroups(params: Readonly<{
     runs: ReturnType<typeof useMachineUpdateRuns>;
     snapshots: ReadonlyMap<string, MachineCapabilitiesSnapshot | null>;
     installables?: readonly InstallableEntry[];
-}>): Readonly<{ groups: UpdatesGroup[]; remotes: RemoteMachineUpdateFacts[] }> {
+}>): Readonly<{ groups: UpdatesGroup[]; remotes: RemoteMachineUpdateFacts[]; uncheckedMachineCount: number }> {
     const installables = params.installables ?? readUpdatableInstallables();
     const groups: UpdatesGroup[] = [];
     const machineId = params.thisMachineId;
@@ -115,5 +138,26 @@ export function buildMachineUpdateGroups(params: Readonly<{
             ],
         });
     }
-    return { groups, remotes };
+    // Coverage: an online machine is checked only once it answered every capability the update-facts
+    // request asks (a missing answer is "not checked"; a failed one is its own "Couldn't check" row).
+    const requestedIds = [...new Set((buildMachineUpdateFactsRequest().requests ?? []).map((request) => request.id))];
+    const uncheckedMachineCount = groups.filter((group) => (
+        group.machineId != null && group.online && !hasAnswered(params.snapshots.get(group.machineId) ?? null, requestedIds)
+    )).length;
+    return { groups, remotes, uncheckedMachineCount };
+}
+
+type SnapshotResults = MachineCapabilitiesSnapshot['response']['results'];
+
+function readProbe(snapshot: MachineCapabilitiesSnapshot | null, capabilityId: string): SnapshotResults[keyof SnapshotResults] | undefined {
+    return snapshot?.response.results[capabilityId as keyof SnapshotResults];
+}
+
+function isProbeFailed(snapshot: MachineCapabilitiesSnapshot | null, capabilityId: string): boolean {
+    const probe = readProbe(snapshot, capabilityId);
+    return probe != null && !probe.ok;
+}
+
+function hasAnswered(snapshot: MachineCapabilitiesSnapshot | null, capabilityIds: readonly string[]): boolean {
+    return capabilityIds.every((id) => readProbe(snapshot, id) != null);
 }

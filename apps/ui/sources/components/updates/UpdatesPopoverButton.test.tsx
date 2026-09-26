@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { UpdatesSummary } from '@/updates/items/buildUpdatesSummary';
 
 vi.mock('react-native', async () => {
@@ -19,9 +20,11 @@ vi.mock('react-native-unistyles', async () => {
 const routerMock = createExpoRouterMock();
 vi.mock('expo-router', () => routerMock.module);
 
+// Machines are storage-owned facts; the default is none.
+const machinesState = vi.hoisted(() => ({ value: [] as Machine[] }));
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
     const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleMock({ importOriginal, overrides: {} });
+    return createStorageModuleMock({ importOriginal, overrides: { useAllMachines: () => machinesState.value } });
 });
 
 // The real Updates owner and content render beneath; only the portal host and the overlay
@@ -82,5 +85,23 @@ describe('UpdatesPopoverButton', () => {
         });
         expect(routerMock.spies.push).toHaveBeenCalledWith('/(app)/settings/updates');
         expect(screen.findAllByTestId('updates.content.popover')).toHaveLength(0);
+    });
+
+    it('the open header says "not checked" when an online machine was never asked, like the pill', async () => {
+        machinesState.value = [{
+            id: 'studio', seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: Date.now(),
+            metadata: { host: 'studio', platform: 'darwin', happyCliVersion: '0.2.12', happyHomeDir: '/h/.happier', homeDir: '/h' },
+        } as Machine];
+        try {
+            const { UpdatesPopoverButton } = await import('./UpdatesPopoverButton');
+            const screen = await renderScreen(<UpdatesPopoverButton summary={TWO} variant="pill" testID="pill" />);
+            await act(async () => {
+                await screen.findByTestId('pill')?.props.onPress({});
+            });
+            const title = screen.findByTestId('updates.summary.title')?.props.children ?? screen.findByTestId('updates.empty')?.props.title;
+            expect(title).toBe('updates.summary.unchecked');
+        } finally {
+            machinesState.value = [];
+        }
     });
 });

@@ -95,6 +95,15 @@ export function compareVersions(version1: string, version2: string): number {
     return 0;
 }
 
+/** External CLI versions may use channels this comparator does not order. */
+export function compareVersionsOrNull(version1: string, version2: string): number | null {
+    try {
+        return compareVersions(version1, version2);
+    } catch {
+        return null;
+    }
+}
+
 /**
  * Check if a version meets the minimum requirement
  * @param version Version to check
@@ -116,11 +125,8 @@ export function getVersionSupportState(
     minimumVersion: string = MINIMUM_CLI_VERSION,
 ): VersionSupportState {
     if (!version) return 'unknown';
-    try {
-        return compareVersions(version, minimumVersion) >= 0 ? 'supported' : 'unsupported';
-    } catch {
-        return 'unknown';
-    }
+    const comparison = compareVersionsOrNull(version, minimumVersion);
+    return comparison === null ? 'unknown' : comparison >= 0 ? 'supported' : 'unsupported';
 }
 
 export function supportsSessionForkRequestId(daemonCliVersion?: string | null): boolean {

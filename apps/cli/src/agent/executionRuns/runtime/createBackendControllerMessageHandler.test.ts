@@ -48,8 +48,9 @@ function createHandlerHarness() {
     options?: Readonly<{ localId?: string; meta?: Record<string, unknown> }>;
   }>> = [];
   let nowMs = 1_700_000_000_000;
+  const ctrl = createController();
   const handler = createBackendControllerMessageHandler({
-    ctrl: createController(),
+    ctrl,
     runId: 'run_1',
     sidechainId: 'sidechain_1',
     intent: 'delegate',
@@ -70,6 +71,7 @@ function createHandlerHarness() {
   return {
     writes,
     sent,
+    ctrl,
     send(message: AgentMessage, nextNowMs = nowMs + 1_000): void {
       nowMs = nextNowMs;
       handler(message);
@@ -100,6 +102,36 @@ describe('createBackendControllerMessageHandler', () => {
     harness.send({ type: 'model-output', textDelta: 'hello' });
 
     expect(harness.writes).toEqual([{ runId: 'run_1', nowMs: 1_700_000_001_000 }]);
+  });
+
+  it('accumulates distinct segment snapshots without duplicating cumulative snapshots', () => {
+    const harness = createHandlerHarness();
+
+    harness.send({ type: 'model-output', fullText: 'hel', fullTextScope: 'segment' });
+    harness.send({ type: 'model-output', fullText: 'hello', fullTextScope: 'segment' });
+    harness.send({ type: 'tool-call', toolName: 'read', args: {}, callId: 'tool_1' });
+    harness.send({ type: 'model-output', fullText: 'hello', fullTextScope: 'segment' });
+
+    expect(harness.ctrl.buffer).toBe('hellohello');
+  });
+
+  it('retains an artifact segment when a later segment only acknowledges completion', () => {
+    const harness = createHandlerHarness();
+
+    harness.send({ type: 'model-output', fullText: 'artifact payload', fullTextScope: 'segment' });
+    harness.send({ type: 'tool-result', toolName: 'write', result: 'ok', callId: 'tool_1' });
+    harness.send({ type: 'model-output', fullText: 'Done', fullTextScope: 'segment' });
+
+    expect(harness.ctrl.buffer).toBe('artifact payloadDone');
+  });
+
+  it('lets a turn-scoped snapshot replace the accumulated turn output', () => {
+    const harness = createHandlerHarness();
+
+    harness.send({ type: 'model-output', fullText: 'stale segment', fullTextScope: 'segment' });
+    harness.send({ type: 'model-output', fullText: 'authoritative turn', fullTextScope: 'turn' });
+
+    expect(harness.ctrl.buffer).toBe('authoritative turn');
   });
 
   it('does not treat vendor session id bookkeeping as run activity', () => {

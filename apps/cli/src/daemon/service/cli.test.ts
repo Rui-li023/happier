@@ -1953,10 +1953,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it.each([
-    ['a drifted', false],
-    ['the current', true],
-  ])('stops and restarts the current Windows service owner when reinstalling the same service label over %s definition', async (_case, definitionIsCurrent) => {
+  it('preserves a running Windows service across install and retry', async () => {
     await withTempDir('happier-service-install-win32-same-owner-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       const lifecycleEvents: string[] = [];
@@ -2028,29 +2025,7 @@ describe('runDaemonServiceCliCommand', () => {
       const paths = resolveDaemonServicePaths(runtime);
       const currentPublicReleaseChannel = runtime.channel === 'publicdev' ? 'dev' : runtime.channel;
       mkdirSync(dirname(paths.installedPath), { recursive: true });
-      if (definitionIsCurrent) {
-        const expectedPlan = planDaemonServiceInstall({
-          platform: runtime.platform,
-          mode: 'user',
-          channel: runtime.channel,
-          targetMode: runtime.targetMode,
-          instanceId: runtime.instanceId,
-          activeServerId: runtime.activeServerId,
-          userHomeDir: runtime.userHomeDir,
-          happierHomeDir: runtime.happierHomeDir,
-          serverUrl: runtime.serverUrl,
-          webappUrl: runtime.webappUrl,
-          publicServerUrl: runtime.publicServerUrl,
-          nodePath: runtime.nodePath,
-          entryPath: runtime.entryPath,
-        });
-        for (const file of expectedPlan.files) {
-          mkdirSync(dirname(file.path), { recursive: true });
-          writeFileSync(file.path, file.content, 'utf-8');
-        }
-      } else {
-        writeValidInstalledWindowsDaemonServiceFile(paths.installedPath);
-      }
+      writeValidInstalledWindowsDaemonServiceFile(paths.installedPath);
       writeDaemonState({
         pid: process.pid,
         httpPort: 43140,
@@ -2076,8 +2051,18 @@ describe('runDaemonServiceCliCommand', () => {
       const createIndex = lifecycleEvents.indexOf('/Create');
       const runIndex = lifecycleEvents.indexOf('/Run');
       expect(stopIndex).toBeGreaterThanOrEqual(0);
-      expect(runIndex).toBeGreaterThan(stopIndex);
-      if (!definitionIsCurrent) expect(createIndex).toBeGreaterThan(stopIndex);
+      expect(createIndex).toBeGreaterThan(stopIndex);
+      expect(runIndex).toBeGreaterThan(createIndex);
+
+      const repeated = captureStdoutJsonOutput<{ ok: boolean }>();
+      try {
+        await runDaemonServiceCliCommand({ argv: ['install', '--yes', '--json'] });
+        expect(repeated.json().ok).toBe(true);
+        const { readDaemonState } = await import('@/persistence');
+        expect(await readDaemonState()).toMatchObject({ runtimeId: 'runtime-win32-install' });
+      } finally {
+        repeated.restore();
+      }
     });
   });
 

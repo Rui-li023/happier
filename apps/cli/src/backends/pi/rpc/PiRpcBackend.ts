@@ -2984,7 +2984,7 @@ export class PiRpcBackend implements AgentBackend {
     }
 
     if (pending.lastCompactionEnd) {
-      void this.continuePendingTurnAfterCompactionPause(pending);
+      void this.continuePendingTurnAfterCompactionPause(pending, state);
       return;
     }
 
@@ -3074,14 +3074,25 @@ export class PiRpcBackend implements AgentBackend {
 
     const timeout = setTimeout(() => {
       if (this.pendingTurn !== pending) return;
-      void this.continuePendingTurnAfterCompactionPause(pending);
+      // Compaction completion is only a recovery candidate. Re-check provider liveness before
+      // enqueueing a follow-up so a delayed artifact or other current activity cannot be raced by
+      // the grace timer.
+      void this.probeLivenessAndDecide(pending);
     }, this.getCompactionResumeGraceMs());
     timeout.unref?.();
     pending.compactionResumeTimeout = timeout;
   }
 
-  private async continuePendingTurnAfterCompactionPause(pending: PendingTurn): Promise<void> {
+  private async continuePendingTurnAfterCompactionPause(
+    pending: PendingTurn,
+    observedState: PiRpcStateData,
+  ): Promise<void> {
     if (this.pendingTurn !== pending) return;
+    if (observedState.isStreaming === true || observedState.isCompacting === true || pending.compactionInProgress) {
+      pending.consecutiveSilentProbes = 0;
+      this.armPendingTurnInactivityTimer(pending);
+      return;
+    }
     if (pending.lastCompactionEnd?.willRetry === true) {
       // Do not turn a delayed PI overflow retry into a false failed turn. The inactivity/liveness
       // probe is the authority: while PI reports streaming/compacting it can run indefinitely; once

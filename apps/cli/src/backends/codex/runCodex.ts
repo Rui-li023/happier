@@ -96,7 +96,10 @@ import {
     type CodexAppServerProviderInputOutcomeBridge,
 } from './appServer/codexAppServerProviderInputOutcome';
 import { reportSessionToDaemonIfRunning } from '@/agent/runtime/startupSideEffects';
-import { isCodexAppServerNoActiveTurnToSteerError } from './appServer/appServerCompatibility';
+import {
+    isCodexAppServerInvalidRequestForMethodError,
+    isCodexAppServerNoActiveTurnToSteerError,
+} from './appServer/appServerCompatibility';
 import { rememberCodexUsageLimitRecoveryPreference } from './appServer/rememberCodexUsageLimitRecoveryPreference';
 import { resolveConfiguredCodexHome } from './utils/resolveConfiguredCodexHome';
 import { buildCodexAppServerConfigOverrides } from './appServer/buildCodexAppServerConfigOverrides';
@@ -251,6 +254,33 @@ function attachRuntimeAuthClassificationToError(
 ): Error {
     const nextError = error instanceof Error ? error : new Error('connected_service_chatgpt_refresh_unavailable');
     return Object.assign(nextError, { runtimeAuthClassification: classification });
+}
+
+function formatCodexResumeFailure(params: Readonly<{
+    backendLabel: 'app-server' | 'ACP';
+    resumeId: string;
+    cause: unknown;
+    localToRemote: boolean;
+}>): string {
+    const { backendLabel, resumeId, cause, localToRemote } = params;
+    const activeWriter = backendLabel === 'app-server'
+        && isCodexAppServerInvalidRequestForMethodError(cause, 'thread/resume')
+        && cause instanceof Error
+        && /\bthread\s+\S+\s+already has an active writer\b/i.test(cause.message);
+    const guidance = activeWriter
+        ? 'Another Codex process is already writing to this thread. Happier cannot resume it through a separate app-server while that writer is active. Continue in the original Codex session. To share control of a new session, start a new session in Happier and run `happier attach` on the same machine.'
+        : `ensure Codex ${backendLabel} can run${localToRemote ? ' reliably' : ''} on this machine, then retry${localToRemote ? ' switching to remote' : ''}.`;
+    const reason = formatErrorForUi(cause);
+    return localToRemote
+        ? `Failed to switch this Codex session from local → remote.\n` +
+          `Reason: could not resume the remote Codex ${backendLabel} session (${resumeId}).\n` +
+          `Details: ${reason}\n` +
+          `${activeWriter ? 'What to do' : 'Fix'}: ${guidance}\n` +
+          `Note: Happier refuses to start a new remote Codex session during a local→remote switch, because it would fork the conversation.`
+        : `Failed to resume this Codex ${backendLabel} session (${resumeId}).\n` +
+          `Reason: ${reason}\n` +
+          `${activeWriter ? 'What to do' : 'Fix'}: ${guidance}\n` +
+          `Note: Happier refuses to start a new Codex session when --resume was requested.`;
 }
 
 /**
@@ -2354,17 +2384,12 @@ export async function runCodex(opts: {
                             void startOrLoadPromise.catch(() => undefined);
                         } else {
                             await invalidateTrackedNativeReturnOnMismatch(e);
-                            const reason = formatErrorForUi(e);
-                            const message = isStrictLocalControl
-                                ? `Failed to switch this Codex session from local → remote.\n` +
-                                  `Reason: could not resume the remote Codex ${remoteResumeBackendLabel} session (${resumeId}).\n` +
-                                  `Details: ${reason}\n` +
-                                  `Fix: ensure Codex ${remoteResumeBackendLabel} can run reliably on this machine, then retry switching to remote.\n` +
-                                  `Note: Happier refuses to start a new remote Codex session during a local→remote switch, because it would fork the conversation.`
-                                : `Failed to resume this Codex ${remoteResumeBackendLabel} session (${resumeId}).\n` +
-                                  `Reason: ${reason}\n` +
-                                  `Fix: ensure Codex ${remoteResumeBackendLabel} can run on this machine, then retry.\n` +
-                                  `Note: Happier refuses to start a new Codex session when --resume was requested.`;
+                            const message = formatCodexResumeFailure({
+                                backendLabel: remoteResumeBackendLabel,
+                                resumeId,
+                                cause: e,
+                                localToRemote: isStrictLocalControl,
+                            });
                             await failStrictCodexResume(message, e);
                         }
                     }
@@ -2678,17 +2703,12 @@ export async function runCodex(opts: {
                                 const isStrictLocalControl = storedSessionIdFromLocalControl === true;
                                 const isStrict = isStrictExplicit || isStrictLocalControl || nativeIdentityMismatch;
                                 if (isStrict) {
-                                    const reason = formatErrorForUi(e);
-                                    const message = isStrictLocalControl
-                                        ? `Failed to switch this Codex session from local → remote.\n` +
-                                          `Reason: could not resume the remote Codex ${remoteResumeBackendLabel} session (${resumeId}).\n` +
-                                          `Details: ${reason}\n` +
-                                          `Fix: ensure Codex ${remoteResumeBackendLabel} can run reliably on this machine, then retry switching to remote.\n` +
-                                          `Note: Happier refuses to start a new remote Codex session during a local→remote switch, because it would fork the conversation.`
-                                        : `Failed to resume this Codex ${remoteResumeBackendLabel} session (${resumeId}).\n` +
-                                          `Reason: ${reason}\n` +
-                                          `Fix: ensure Codex ${remoteResumeBackendLabel} can run on this machine, then retry.\n` +
-                                          `Note: Happier refuses to start a new Codex session when --resume was requested.`;
+                                    const message = formatCodexResumeFailure({
+                                        backendLabel: remoteResumeBackendLabel,
+                                        resumeId,
+                                        cause: e,
+                                        localToRemote: isStrictLocalControl,
+                                    });
                                     await failStrictCodexResume(message, e);
                                 }
 

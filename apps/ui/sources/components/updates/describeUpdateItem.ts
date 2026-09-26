@@ -64,6 +64,7 @@ function describeStatus(item: UpdateItem): string {
             if (item.step === 'restarting') return t('updates.row.restarting');
             if (item.step === 'restartingService') return t('updates.row.restartingService');
             if (item.step === 'reconnecting') return t('updates.row.waitingReconnect');
+            if (item.step === 'lostConnection') return t('updates.row.lostConnection');
             return item.latestVersion ? t('updates.row.updatingTo', { version: item.latestVersion }) : t('updates.row.updating');
         case 'ready':
             return item.latestVersion ? t('updates.row.readyVersion', { version: item.latestVersion }) : t('updates.row.ready');

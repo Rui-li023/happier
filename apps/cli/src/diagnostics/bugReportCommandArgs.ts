@@ -29,6 +29,8 @@ export type ParsedBugReportArgs = {
   acceptedPrivacyNotice: boolean;
   providerUrl: string;
   existingIssueNumber: number | null;
+  exportPath: string;
+  dryRun: boolean;
   skipSimilarIssues: boolean;
   serverVersion: string;
   deploymentType: BugReportDeploymentType | null;
@@ -58,6 +60,8 @@ export function bugReportUsage(): string {
     '  --include-diagnostics / --no-include-diagnostics',
     '  --accept-privacy-notice            Skip interactive privacy confirmation',
     '  --provider-url <url>               Override diagnostics service URL',
+    '  --export <path>                    Write a redacted diagnostics bundle without submitting',
+    '  --dry-run --output <path>          Collect and export diagnostics without submitting',
     '  --existing-issue-number <number>   Post report as a comment on an existing issue',
     '  --no-similar-issues                Skip searching for similar issues',
     '  --server-version <version>',
@@ -86,6 +90,8 @@ export function parseBugReportArgs(args: string[]): ParsedBugReportArgs {
     acceptedPrivacyNotice: false,
     providerUrl: '',
     existingIssueNumber: null,
+    exportPath: '',
+    dryRun: false,
     skipSimilarIssues: false,
     serverVersion: '',
     deploymentType: null,
@@ -196,6 +202,14 @@ export function parseBugReportArgs(args: string[]): ParsedBugReportArgs {
       parsed.existingIssueNumber = parsedNumber;
       continue;
     }
+    if (arg === '--export' || arg === '--output') {
+      [parsed.exportPath, index] = readValue(index, arg);
+      continue;
+    }
+    if (arg === '--dry-run') {
+      parsed.dryRun = true;
+      continue;
+    }
     if (arg === '--no-similar-issues') {
       parsed.skipSimilarIssues = true;
       continue;
@@ -246,6 +260,10 @@ export function parseBugReportArgs(args: string[]): ParsedBugReportArgs {
   parsed.expectedBehavior = parsed.expectedBehavior.trim();
   parsed.whatChangedRecently = parsed.whatChangedRecently.trim();
   parsed.providerUrl = parsed.providerUrl.trim();
+  parsed.exportPath = parsed.exportPath.trim();
+  if (parsed.dryRun && !parsed.exportPath) {
+    throw new Error('The --dry-run option requires --output <path>');
+  }
   parsed.serverVersion = parsed.serverVersion.trim();
   parsed.sessionId = parsed.sessionId.trim();
   parsed.attachments = parsed.attachments

@@ -60,18 +60,21 @@ test('the desktop-build gate resolves desktop-setup through the registry with a 
   const gate = (overrides) => resolveReleaseValidationSuiteGate({
     suiteId: 'desktop-setup',
     hasDesktopCandidate: true,
-    hasCliCandidate: true,
+    candidateCliVersion: '0.2.13',
     candidateChannel: 'production',
     ...overrides,
   });
-  assert.deepEqual(gate({}), { run: 'true', skip_reason: '', timeout_minutes: '20' });
+  assert.deepEqual(gate({}), { run: 'true', skip_reason: '', timeout_minutes: '20', cli_source: 'published-tag', cli_ref: 'cli-v0.2.13' });
+  // Desktop-only release: the published stable CLI users would get.
+  assert.deepEqual(gate({ candidateCliVersion: '' }), { run: 'true', skip_reason: '', timeout_minutes: '20', cli_source: 'published-channel', cli_ref: 'stable' });
   assert.deepEqual(gate({ candidateChannel: 'preview' }), {
     run: 'false',
     skip_reason: 'no pinned preview predecessor for the upgrade scenario',
     timeout_minutes: '20',
+    cli_source: '',
+    cli_ref: '',
   });
   assert.equal(gate({ candidateChannel: 'dev' }).skip_reason, 'no pinned dev predecessor for the upgrade scenario');
-  assert.equal(gate({ hasCliCandidate: false }).skip_reason, 'no CLI candidate');
   assert.throws(() => gate({ suiteId: 'unknown' }), /Unknown release validation suite/);
 });
 

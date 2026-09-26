@@ -815,7 +815,7 @@ describe('runClaudeUnifiedTerminalSession resumed hook activation', () => {
     }
   });
 
-  it('keeps a known resumed session alive when owned UserPromptSubmit precedes exact transcript acceptance', async () => {
+  it.each([true, false])('settles exact resumed prompt custody before enforcing hook activation (hooks active: %s)', async (hooksActive) => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-claude-unified-resumed-hook-activation-'));
     tempDirs.push(dir);
     const workspaceDir = join(dir, 'workspace');
@@ -833,8 +833,18 @@ describe('runClaudeUnifiedTerminalSession resumed hook activation', () => {
     const assistantText = 'RESUMED_HOOK_ACTIVATION_OK';
     const abortController = new AbortController();
     const onMessage = vi.fn<(message: RawJSONLines) => void>();
+    let resolveTranscriptObserved!: () => void;
+    const transcriptObserved = new Promise<void>((resolve) => { resolveTranscriptObserved = resolve; });
+    let transcriptObservedDuringInjection = false;
     const onTranscriptMessageSuppressed = vi.fn<(message: RawJSONLines) => void>();
+    const onRawTranscriptValue = (message: unknown) => {
+      if (!message || typeof message !== 'object' || !('uuid' in message)
+        || message.uuid !== 'resumed-hook-accepted-user-row') return;
+      transcriptObservedDuringInjection ||= !injected;
+      resolveTranscriptObserved();
+    };
     const onPromptAcceptedByProvider = vi.fn();
+    const returnUnconsumedMessage = vi.fn();
     let resolveReady!: () => void;
     const ready = new Promise<void>((resolve) => {
       resolveReady = resolve;
@@ -878,7 +888,7 @@ describe('runClaudeUnifiedTerminalSession resumed hook activation', () => {
         await new Promise((resolve) => setTimeout(resolve, 100));
         const hook = subscribedHook;
         if (!hook) throw new Error('Claude session hook subscription was not registered before injection');
-        hook({
+        if (hooksActive) hook({
           hook_event_name: 'UserPromptSubmit',
           session_id: claudeSessionId,
           transcript_path: transcriptPath,
@@ -895,6 +905,12 @@ describe('runClaudeUnifiedTerminalSession resumed hook activation', () => {
           isSidechain: false,
           message: { role: 'user', content: input.text },
         })}\n`);
+        // Hold the OS injection boundary open while the real follower reads acceptance.
+        if (!hooksActive) {
+          await transcriptObserved;
+          // Let the real follower's queued acceptance confirmation drain before the OS write returns.
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
         injected = true;
         return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
       }),
@@ -927,7 +943,9 @@ describe('runClaudeUnifiedTerminalSession resumed hook activation', () => {
       },
       onMessage,
       onTranscriptMessageSuppressed,
+      onRawTranscriptValue,
       onPromptAcceptedByProvider,
+      returnUnconsumedMessage,
       onReady,
       resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
       buildSpawn: async () => ({ spawnArgv: ['/bin/claude'], spawnEnv: {} }),
@@ -959,6 +977,16 @@ describe('runClaudeUnifiedTerminalSession resumed hook activation', () => {
         'claude-unified-provider-observer-installed',
       );
       await waitUntil(() => onPromptAcceptedByProvider.mock.calls.length === 1 || sessionOutcome !== 'pending');
+      if (!hooksActive) {
+        expect(transcriptObservedDuringInjection).toBe(true);
+        await sessionPromise;
+        expect(sessionError).toMatchObject({ code: 'claude_unified_terminal_hook_activation_missing' });
+        expect(onPromptAcceptedByProvider).toHaveBeenCalledExactlyOnceWith({
+          message: prompt, maxUserMessageSeq: 2039, userMessageLocalIds: ['resumed-hook-local-id'],
+        });
+        expect(returnUnconsumedMessage).not.toHaveBeenCalled();
+        return;
+      }
       expect(sessionOutcome, `session stopped before assistant delivery: ${String(sessionError)}`).toBe('pending');
       expect(onPromptAcceptedByProvider).toHaveBeenCalledTimes(1);
 

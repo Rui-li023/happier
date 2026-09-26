@@ -11,6 +11,7 @@ import type { TerminalAttachmentInfo } from '@/terminal/attachment/terminalAttac
 
 import { runClaudeUnifiedTerminalSession } from './runClaudeUnifiedTerminalSession';
 import { buildClaudeUnifiedTerminalSpawn } from './buildClaudeUnifiedTerminalSpawn';
+import { requestClaudeExplicitRunnerStop } from '../claudeExplicitRunnerStop';
 
 const attachmentId = 'attachment-adopted-resume' as TerminalAttachmentId;
 const existingHandle: TerminalHostHandle = {
@@ -80,6 +81,44 @@ function baseOptions(
 }
 
 describe('runClaudeUnifiedTerminalSession launch disposition', () => {
+  it('can stop the exact acquired host while startup metadata publication is still in progress', async () => {
+    const abortController = new AbortController();
+    const adapter = createAdapter();
+    let storedAttachment: TerminalAttachmentInfo | null = null;
+    let stopOwnedHost: (() => Promise<void>) | null = null;
+
+    await runClaudeUnifiedTerminalSession({
+      ...baseOptions(adapter, abortController),
+      createController: undefined,
+      persistTerminalHostAttachmentInfo: async ({ sessionId, attachmentId, handle, terminal }) => {
+        storedAttachment = {
+          version: 2, sessionId, attachmentId,
+          handle: { ...handle, attachmentId }, terminal, updatedAt: 1,
+        };
+      },
+      readTerminalHostAttachmentInfo: async () => storedAttachment,
+      removeTerminalHostAttachmentInfo: async () => { storedAttachment = null; },
+      onTerminalHostReady: ({ destroyOwnedHostForExplicitStop }) => {
+        stopOwnedHost = destroyOwnedHostForExplicitStop;
+      },
+      // The API publication boundary can remain pending during startup. Stop must already
+      // own the persisted attachment without waiting for this or provider initialization.
+      publishTerminalHostMetadata: async () => {
+        await requestClaudeExplicitRunnerStop({
+          unifiedTerminalEnabled: true,
+          destroyOwnedHostForExplicitStop: stopOwnedHost,
+          requestTermination: () => abortController.abort(),
+          whenTerminated: Promise.resolve(),
+        });
+      },
+    });
+
+    expect(storedAttachment).toBeNull();
+    expect(adapter.dispose).toHaveBeenCalledExactlyOnceWith(existingHandle);
+    expect(adapter.injectUserPrompt).not.toHaveBeenCalled();
+    expect(abortController.signal.aborted).toBe(true);
+  });
+
   it('publishes the host attachment before controller startup completes', async () => {
     const abortController = new AbortController();
     const adapter = createAdapter();
@@ -101,12 +140,10 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
         run: async () => {
           controllerRunStarted = true;
           await controllerRun;
+          abortController.abort();
         },
         dispose: async () => undefined,
       }),
-      onTerminalHostReady: async () => {
-        abortController.abort();
-      },
     });
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {

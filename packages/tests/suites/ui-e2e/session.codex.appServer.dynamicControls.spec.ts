@@ -759,30 +759,35 @@ async function ensureSessionMode(page: Page, optionId: 'plan' | 'default'): Prom
     const modeChip = page.getByTestId('agent-input-session-mode-chip');
     await expect(modeChip).toHaveCount(1, { timeout: 60_000 });
 
-    const expectedLabel = optionId === 'plan' ? /plan/i : /default/i;
+    const selectedMode = page.getByTestId(`agent-input-session-mode-chip-label:${optionId}`);
     const readChipText = async () => (await modeChip.textContent().catch(() => '')) ?? '';
 
-    if (expectedLabel.test(await readChipText())) return;
+    if (await selectedMode.count()) return;
 
     // If the chip opens a picker, the option elements will appear; otherwise the chip cycles modes.
     await modeChip.click();
-    if (expectedLabel.test(await readChipText())) return;
+    if (await selectedMode.count()) return;
 
     // Phase 11 SelectionList migration: `agent-input-simple-option:*` is gone; the shared
     // SelectionList popover emits options under `selection-list:session-mode-root:option:<id>`.
     const anyModeOption = page.locator('[data-testid^="agent-input-session-mode-option:"], [data-testid^="selection-list:session-mode-root:option:"]').first();
+    let hasPicker = false;
     try {
         await expect(anyModeOption).toHaveCount(1, { timeout: 1_500 });
+        hasPicker = true;
+    } catch {
+        // This control cycles directly when it has no picker.
+    }
+    if (hasPicker) {
         await clickSessionModeOption(page, optionId);
+        await expect(selectedMode).toHaveCount(1, { timeout: 60_000 });
         await page.keyboard.press('Escape').catch(() => {});
         return;
-    } catch {
-        // fall through to cycle behavior
     }
 
     for (let i = 0; i < 4; i += 1) {
         await modeChip.click();
-        if (expectedLabel.test(await readChipText())) return;
+        if (await selectedMode.count()) return;
         await page.waitForTimeout(100);
     }
 

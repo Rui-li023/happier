@@ -64,13 +64,15 @@ export function extractBundledHsetup({ artifactPath, outFile, exec = execFileSyn
       throw new Error(`unsupported desktop artifact (expected .deb or .AppImage): ${artifact}`);
     }
     const resource = findHsetupResource(root);
-    const bytes = gunzipSync(readFileSync(resource));
+    const resourceGz = readFileSync(resource);
+    const bytes = gunzipSync(resourceGz);
     writeFileSync(outFile, bytes, { mode: 0o755 });
     chmodSync(outFile, 0o755);
     return {
       artifact: basename(artifact),
       artifactSha256: sha256(readFileSync(artifact)),
       resource: resource.slice(root.length + 1),
+      resourceBytes: resourceGz.length,
       hsetupSha256: sha256(bytes),
     };
   } finally {

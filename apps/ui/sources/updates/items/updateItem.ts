@@ -1,4 +1,4 @@
-import { compareVersions, parseVersion } from '@/utils/system/versionUtils';
+import { compareVersionsOrNull } from '@/utils/system/versionUtils';
 
 /**
  * K7 — the UI-only update projection. One row per updatable thing, built from the owners that
@@ -45,7 +45,8 @@ export type UpdateItemAction =
 
 /** Which step is running, when the producer says, for the row's one-line status. */
 /** `reconnecting`: installed on another machine, waiting for it to come back (K5 `pendingReconnect`). */
-export type UpdateItemStep = 'downloading' | 'installing' | 'restarting' | 'restartingService' | 'reconnecting' | null;
+/** `lostConnection`: the machine stopped answering before its update task reported; it may still be updating. */
+export type UpdateItemStep = 'downloading' | 'installing' | 'restarting' | 'restartingService' | 'reconnecting' | 'lostConnection' | null;
 
 /** Why the last attempt did not finish, as a key the row maps to one sentence. */
 export type UpdateItemFailure =
@@ -89,11 +90,11 @@ export function isUpdateItemActionable(item: UpdateItem): boolean {
         && !item.skipped;
 }
 
-/** `true` only when both versions parse and `latest` is newer. Unparseable input never claims an update. */
-export function isNewerVersion(current: string | null, latest: string | null): boolean {
-    if (!current || !latest) return false;
-    if (!parseVersion(current) || !parseVersion(latest)) return false;
-    return compareVersions(current, latest) < 0;
+/** `null` means the versions cannot be ordered; an opaque vendor version never proves up-to-date. */
+export function isNewerVersion(current: string | null, latest: string | null): boolean | null {
+    if (!current || !latest) return null;
+    const comparison = compareVersionsOrNull(current, latest);
+    return comparison === null ? null : comparison < 0;
 }
 
 export function buildUpdateItemId(machineKey: string, subject: UpdateSubject): string {

@@ -20,7 +20,6 @@ const DAEMON_ONLY_ENV_KEYS = [
   'HAPPIER_DAEMON_TAKEOVER',
 ] as const;
 
-/** Keys the daemon decides for its children; launchers that inherit another env must pin them. */
 export const DAEMON_DECIDED_CHILD_ENV_KEYS = [
   ...HAPPIER_RUNTIME_CONTEXT_ENV_KEYS,
   ...STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS,
@@ -30,6 +29,7 @@ export const DAEMON_DECIDED_CHILD_ENV_KEYS = [
 export function buildSpawnChildProcessEnv(params: {
   processEnv: NodeJS.ProcessEnv;
   extraEnv: Record<string, string | undefined>;
+  homeDir?: string;
   serverSelectionEnv?: ChildServerSelectionEnv;
 }): NodeJS.ProcessEnv {
   const env = stripNestedSessionDetectionEnv({ ...params.processEnv, ...params.extraEnv });
@@ -57,6 +57,7 @@ export function buildSpawnChildProcessEnv(params: {
   }
   delete env.HAPPIER_STACK_PROCESS_KIND;
   Object.assign(env, stackProcessKindOverride);
+  Object.assign(env, resolveHappierRuntimeContextEnv({ homeDir: params.homeDir }));
 
   if (params.serverSelectionEnv) {
     // Clear any stale inherited split URLs, then apply the authoritative selection

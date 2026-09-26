@@ -5,7 +5,7 @@ import type { CapabilitiesDetectRequest, CapabilitiesInvokeRequest } from '@/syn
 import { settingsParse } from '@/sync/domains/settings/settings';
 import type { MachineCapabilitiesInvokeResult } from '@/sync/ops';
 
-import { buildInstallablesBackgroundActionKey, ensureAgentInstallablesBackground } from './ensureAgentInstallablesBackground';
+import { buildInstallablesBackgroundActionKey, ensureAgentInstallablesBackground, ensureMachineUpdateFactsBackground } from './ensureAgentInstallablesBackground';
 
 function buildMissingCodexAcpResults() {
     return {
@@ -375,6 +375,19 @@ describe('ensureAgentInstallablesBackground', () => {
 
         it('never asks a daemon that predates K6 (it would ignore the request)', async () => {
             expect(await run(agentResult({}, Date.now()))).toEqual([]);
+        });
+    });
+
+    describe('update facts for every installed agent and helper (R13 (e) summary coverage)', () => {
+        it('asks each machine once, on the shared freshness policy, for every agent CLI with its latest version and every helper', async () => {
+            const prefetchMachineCapabilitiesIfStale = vi.fn(async (_params: { machineId: string; staleMs: number; request: CapabilitiesDetectRequest }) => {});
+            await ensureMachineUpdateFactsBackground({ machineIds: ['m1', 'm2'] }, { prefetchMachineCapabilitiesIfStale });
+            expect(prefetchMachineCapabilitiesIfStale).toHaveBeenCalledTimes(2);
+            const [first] = prefetchMachineCapabilitiesIfStale.mock.calls[0]!;
+            expect(first.staleMs).toBe(24 * 60 * 60 * 1000);
+            const ids = (first.request.requests ?? []).map((request) => request.id);
+            expect(ids).toEqual(expect.arrayContaining(['cli.claude', 'cli.codex', 'dep.gh', 'tool.systemTasks']));
+            expect((first.request.requests ?? []).find((request) => request.id === 'cli.claude')?.params).toEqual({ includeLatestVersion: true });
         });
     });
 });

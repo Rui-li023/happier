@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 
@@ -10,6 +10,7 @@ import {
 } from '@happier-dev/cli-common/firstPartyRuntime';
 import { PUBLIC_RELEASE_RING_IDS, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 
+import { resolveRunningCliPackageManagerOrigin, resolveThisCliNpmPackageName } from '@/cli/runtime/update/cliUpdateFacts';
 import { buildMissingJavaScriptRuntimeMessage } from '@/runtime/js/buildMissingJavaScriptRuntimeMessage';
 import { ensureJavaScriptRuntimeExecutable } from '@/runtime/js/ensureJavaScriptRuntimeExecutable';
 
@@ -109,6 +110,26 @@ function isInsidePath(root: string, candidate: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
+/**
+ * The version-stable launcher of a Homebrew-installed CLI: the running executable through
+ * Homebrew's opt prefix (`<prefix>/opt/<formula>/…`, a link to the active keg). The executable
+ * itself resolves into `Cellar/<formula>/<version>/`, which `brew upgrade` cleans up, so a service
+ * recording it would stop starting after the next upgrade. `null` for any other install.
+ *
+ * Both the resolution's exec path and this process's are read: the drift check resolves the
+ * expected definition from the service runtime's JS runtime path (a managed node, when present),
+ * while the Homebrew CLI running the check is what the service launches.
+ */
+function resolveHomebrewDaemonServiceLauncher(currentExecPath: string): string | null {
+  const origin = resolveRunningCliPackageManagerOrigin({
+    invokedPath: currentExecPath,
+    execPath: process.execPath,
+    npmPackageName: resolveThisCliNpmPackageName(),
+  });
+  const optPath = origin?.kind === 'brew' ? origin.optPath : null;
+  return optPath && existsSync(optPath) ? optPath : null;
+}
+
 export async function resolveDaemonServiceInstallRuntimeTarget(options: Readonly<{
   currentExecPath?: string | null;
   explicitNodePath?: string | null;
@@ -138,6 +159,15 @@ export async function resolveDaemonServiceInstallRuntimeTarget(options: Readonly
       return resolveDaemonServiceRuntimeTarget({
         currentExecPath,
         explicitNodePath: managedShimPath,
+      });
+    }
+    // Like the managed shim, a Homebrew CLI's service launches the CLI binary itself, through the
+    // path that survives `brew upgrade`.
+    const homebrewLauncher = resolveHomebrewDaemonServiceLauncher(currentExecPath);
+    if (homebrewLauncher) {
+      return resolveDaemonServiceRuntimeTarget({
+        currentExecPath,
+        explicitNodePath: homebrewLauncher,
       });
     }
   }

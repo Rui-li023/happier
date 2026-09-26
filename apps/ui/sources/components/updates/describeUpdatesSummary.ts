@@ -52,6 +52,8 @@ export function describeUpdatesHeader(
     switch (summary.status) {
         case 'checking':
             return { ...base, title: t('updates.summary.checking'), meta: checked };
+        case 'unchecked':
+            return { ...base, title: t('updates.summary.unchecked'), meta: t('updates.summary.uncheckedMeta') };
         case 'unknown':
             return { ...base, title: t('updates.summary.unknown'), meta: checked };
         case 'offline':
@@ -76,6 +78,8 @@ export function describeUpdatesSettingsSubtitle(summary: UpdatesSummary): string
             return t('updates.settingsSubtitle.failed');
         case 'unknown':
             return t('updates.settingsSubtitle.unknown');
+        case 'unchecked':
+            return t('updates.settingsSubtitle.unchecked');
         case 'offline':
             return t('updates.settingsSubtitle.offline');
         case 'checking':

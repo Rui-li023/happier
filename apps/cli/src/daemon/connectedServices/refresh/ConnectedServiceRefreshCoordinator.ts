@@ -984,8 +984,10 @@ export class ConnectedServiceRefreshCoordinator {
         }
       }
     } else if (
-      result.status === 'refresh_failed'
-      && isReauthRequiredFailure(result.diagnostic.category ?? 'unknown')
+      (result.status === 'refresh_failed'
+        && isReauthRequiredFailure(result.diagnostic.category ?? 'unknown'))
+      || (result.status === 'blocked_by_credential_health'
+        && result.diagnostic.category !== undefined)
     ) {
       this.armCredentialHealthReprobeBackoff({
         serviceId: result.diagnostic.serviceId,
@@ -1361,6 +1363,29 @@ export class ConnectedServiceRefreshCoordinator {
       });
     } catch (error) {
       const refreshError = error instanceof ConnectedServiceOauthRefreshError ? error : null;
+      const category = refreshError?.category ?? 'unknown';
+      if (isCredentialHealthReprobe && !isReauthRequiredFailure(category)) {
+        // A forced reprobe is only allowed to clear a needs_reauth latch after a
+        // successful rotation or a conclusive auth failure. A transient provider,
+        // network, or malformed-response error must leave the existing latch in
+        // place so it cannot be downgraded to retryable health by this attempt.
+        return {
+          status: 'blocked_by_credential_health',
+          credential: null,
+          credentialRevision: leasedSource.credentialRevision,
+          diagnostic: buildRefreshDiagnostic({
+            binding,
+            reason: options.reason,
+            status: 'blocked_by_credential_health',
+            category,
+            providerStatus: refreshError?.status,
+            providerErrorCode: refreshError?.providerErrorCode,
+            expiresAt,
+            now,
+            refreshWindowMs: this.params.refreshWindowMs,
+          }),
+        };
+      }
       return {
         status: 'refresh_failed',
         credential: null,
@@ -1369,7 +1394,7 @@ export class ConnectedServiceRefreshCoordinator {
           binding,
           reason: options.reason,
           status: 'refresh_failed',
-          category: refreshError?.category ?? 'unknown',
+          category,
           providerStatus: refreshError?.status,
           providerErrorCode: refreshError?.providerErrorCode,
           expiresAt,

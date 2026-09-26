@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { parseArgs } from 'node:util';
 
-import { waitForAppIpcStatusRead, writeStubHappierCli } from './linux-appimage-ipc-probe.mjs';
+import { assertPackagedHsetupResolution, waitForAppIpcStatusRead, writeStubHappierCli } from './linux-appimage-ipc-probe.mjs';
 import { observeTauriStartup } from './linux-appimage-smoke-process.mjs';
 import { extractBundledHsetup } from './linux-desktop-hsetup.mjs';
 
@@ -58,7 +58,15 @@ async function main() {
       timeoutMs: durationMs,
       appExited: () => (app.exitCode === null && app.signalCode === null ? null : `code=${app.exitCode} signal=${app.signalCode}`),
     });
-    console.log(`[linux-appimage-smoke] the app ran daemon.service.status.v1 through its IPC: bundled hsetup ${bundled.resource} (sha256 ${bundled.hsetupSha256}) at ${hsetupExe} ran \`happier ${statusRead.argv.join(' ')}\` read-only`);
+    // Same bytes is not enough: the checkout's `binaries` could carry them too. The path proves the
+    // app resolved its packaged resource.
+    const resolution = assertPackagedHsetupResolution({
+      hsetupExe,
+      cacheHome: path.join(home, '.cache'),
+      resource: bundled.resource,
+      resourceBytes: bundled.resourceBytes,
+    });
+    console.log(`[linux-appimage-smoke] the app ran daemon.service.status.v1 through its IPC: bundled hsetup ${bundled.resource} (sha256 ${bundled.hsetupSha256}, ${resolution}) at ${hsetupExe} ran \`happier ${statusRead.argv.join(' ')}\` read-only`);
     console.log(`[linux-appimage-smoke] passed: remained alive for ${durationMs / 1000}s`);
   } finally { cleanup(); fs.rmSync(scratch, { recursive: true, force: true }); }
 }

@@ -41,6 +41,23 @@ Important:
 - npm installs expose the npm dist-tags (`@latest` and `@next`).
 - The rolling `dev` lane is installer-managed (`install-dev` / `hdev`), not a separate npm dist-tag.
 
+### Homebrew (coming soon)
+
+<Callout type="warn" title="Not published yet">
+The Homebrew formula is prepared but its tap is not public yet, so this command does not work
+today. Use the installer above until this notice is gone.
+</Callout>
+
+On macOS 13 (Ventura) or later and on Linux, the stable CLI will install from Happier's own tap:
+
+```bash
+brew install happier-dev/tap/happier
+```
+
+The formula installs the same signed release payload the installer does, into Homebrew's prefix,
+and links `happier` onto your `PATH`. It has no `brew services` entry: the background service is
+still set up by the CLI itself (`happier setup`, or `happier service install`).
+
 ## Updates
 
 How you update depends on how you installed the CLI:
@@ -48,6 +65,7 @@ How you update depends on how you installed the CLI:
 - **Installer install**: run the lane-specific command (`happier`, `hprev`, or `hdev`) with `self check` / `self update` (or rerun the matching installer endpoint). Installer installs keep the full CLI payload under `~/.happier/cli/current` and refresh the selected lane shim for you.
 - Stable is `~/.happier/cli/current`; preview/dev use `~/.happier/cli-preview/current` and `~/.happier/cli-dev/current`.
 - **npm install**: `npm install -g @happier-dev/cli@latest` (or `@next` for preview). npm does not currently expose a separate public `dev` dist-tag.
+- **Homebrew install** (once published): `brew upgrade happier`. `happier self update` recognises a Homebrew install and prints that command instead of replacing Homebrew's copy.
 
 ### Using the desktop app with a CLI you installed yourself
 

@@ -315,7 +315,7 @@ export function createClaudeUnifiedTerminalReadinessBridge(opts: Readonly<{
       try {
         liveness = await awaitReadinessOperation(opts.hostAdapter.evaluateLiveness(opts.handle));
       } catch (error: unknown) {
-        endHumanDialogWait();
+        // An unavailable observation does not resolve an outstanding human choice.
         if (isClaudeUnifiedTerminalReadinessTimeoutError(error)) throw error;
         if (!(await continueAfterDelay())) return;
         continue;
@@ -324,7 +324,7 @@ export function createClaudeUnifiedTerminalReadinessBridge(opts: Readonly<{
       if (disposed || abortSignal.aborted) return;
       lastLivenessPaneAlive = liveness.paneAlive;
       if (!liveness.paneAlive) {
-        endHumanDialogWait();
+        if (!liveness.probeInconclusive) endHumanDialogWait();
         if (!(await continueAfterDelay())) return;
         continue;
       }
@@ -334,7 +334,7 @@ export function createClaudeUnifiedTerminalReadinessBridge(opts: Readonly<{
         try {
           inputState = await awaitReadinessOperation(opts.hostAdapter.captureInputState(opts.handle));
         } catch (error: unknown) {
-          endHumanDialogWait();
+          // Keep a confirmed human wait until a readable screen or definitive host death.
           if (isClaudeUnifiedTerminalReadinessTimeoutError(error)) throw error;
           if (!(await continueAfterDelay())) return;
           continue;

@@ -1,7 +1,10 @@
+import { writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import {
   BUG_REPORT_DEFAULT_ISSUE_OWNER,
   BUG_REPORT_DEFAULT_ISSUE_REPO,
+  buildBugReportExportBundle,
+  serializeBugReportExportBundle,
   buildBugReportFallbackIssueUrl as buildFallbackIssueUrl,
   formatBugReportFallbackIssueBody as formatFallbackIssueBody,
   appendBugReportReporterToSummary,
@@ -49,6 +52,13 @@ type BugReportSubmittedResult = {
   artifactCount: number;
 };
 
+type BugReportExportedResult = {
+  mode: 'exported';
+  outputPath: string;
+  diagnosticsIncluded: boolean;
+  artifactCount: number;
+};
+
 type BugReportFallbackResult = {
   mode: 'fallback';
   issueUrl: string;
@@ -59,7 +69,7 @@ type BugReportFallbackResult = {
   errorMessage?: string;
 };
 
-export type BugReportCommandResult = BugReportSubmittedResult | BugReportFallbackResult;
+export type BugReportCommandResult = BugReportSubmittedResult | BugReportExportedResult | BugReportFallbackResult;
 
 export type BugReportCommandDependencies = {
   getActiveServerProfile: () => Promise<Pick<ServerProfile, 'id' | 'name' | 'serverUrl' | 'webappUrl'>>;
@@ -75,6 +85,7 @@ export type BugReportCommandDependencies = {
   }) => Promise<{ issues: BugReportSimilarIssue[] }>;
   isInteractiveTerminal: () => boolean;
   promptInput: (question: string) => Promise<string>;
+  writeExportFile: (path: string, contents: string) => Promise<void>;
 };
 
 const DEFAULT_DEPS: BugReportCommandDependencies = {
@@ -92,6 +103,9 @@ const DEFAULT_DEPS: BugReportCommandDependencies = {
     }),
   isInteractiveTerminal,
   promptInput,
+  writeExportFile: async (path, contents) => {
+    await writeFile(path, contents, 'utf8');
+  },
 };
 
 async function resolveRequiredField(input: {
@@ -282,7 +296,7 @@ export async function runBugReportCommand(
     return result;
   };
 
-  if (!feature.enabled || !providerUrl) {
+  if ((!feature.enabled || !providerUrl) && !parsed.exportPath) {
     return buildFallback(
       featureFetchError ? 'feature-fetch-failed' : 'feature-disabled',
       featureFetchError,
@@ -354,6 +368,21 @@ export async function runBugReportCommand(
       acceptedPrivacyNotice,
     },
   };
+
+  if (parsed.exportPath) {
+    const bundle = buildBugReportExportBundle({
+      form,
+      environment,
+      artifacts: diagnostics.artifacts,
+    });
+    await deps.writeExportFile(parsed.exportPath, serializeBugReportExportBundle(bundle));
+    return {
+      mode: 'exported',
+      outputPath: parsed.exportPath,
+      diagnosticsIncluded: includeDiagnostics,
+      artifactCount: diagnostics.artifacts.length,
+    };
+  }
 
   let submitted: { reportId: string; issueNumber: number; issueUrl: string };
   try {

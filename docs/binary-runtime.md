@@ -31,9 +31,11 @@ computer the app is on. Acquisition is not a separate step: `runLocalHappierJson
 `ensureLocalFirstPartyComponentCommand(...)` before every CLI invocation that does not already
 carry a resolved CLI, so reading daemon status already downloads, verifies and installs the managed
 CLI when it is missing. There is no second acquisition trigger and no persisted prefetch state —
-one in-memory promise per app open. The install itself runs under the install mutation lock
-(`withFirstPartyPayloadMutationLock`), which a concurrent installer, update or acquisition of the
-same install root fails on at once. Updating an installed CLI is not acquisition: it is the one
+one in-memory promise per app open. The install itself runs under the install root's mutation
+lock and — because launchers and the default-channel record are shared across channels — the
+home-wide activation lock (`withFirstPartyPayloadMutationLock.ts`); a concurrent installer, update
+or acquisition fails on either at once. An acquisition downloads before taking them; the update
+transaction takes them first, so one update per home downloads at a time. Updating an installed CLI is not acquisition: it is the one
 update transaction (`runManagedCliUpdate`, see `docs/cli-architecture.md` → "One CLI update
 transaction").
 
@@ -173,6 +175,58 @@ name, and an `override` CLI fails immediately. Only `managed` is approved for pa
 `override` CLI is put to the user once, naming the resolved path. `managed` records install
 ownership, not verified publisher provenance — see
 [Managed-CLI install ownership](cli-architecture.md#managed-cli-install-ownership-silent-vs-attended-approval).
+
+## Homebrew-owned CLIs
+
+Status: prepared, not published. `scripts/pipeline/release/render-homebrew-packages.mjs` renders
+the formula (tap `happier-dev/homebrew-tap`) and the cask (intended for `homebrew/cask`) from a
+stable release's real assets and its signed `checksums-*.txt`.
+
+- The formula is a release product, never checked in. `release.yml` job `publish_homebrew_tap`
+  renders it from the verified stable `cli-v<version>` release (the one this run promoted, or the
+  one a resumed run's origin already promoted) and commits it to the tap. The job does nothing
+  until the repository variable `HOMEBREW_TAP_REPO_NAME` is set.
+- The generator refuses CLI releases before `HOMEBREW_FORMULA_MIN_CLI_VERSION` (0.2.13), the first
+  whose `self update` and service launcher are correct under Homebrew. The 0.2.12 rendering is kept
+  only as a test fixture.
+- Happier requires macOS 13 (Ventura), from one owner: `HAPPIER_MIN_MACOS` in the generator
+  renders `depends_on macos: :ventura` for the formula (inside `on_macos`) and the cask alike.
+  The darwin CLI binaries (Bun) declare LC_BUILD_VERSION minos 13.0, and the desktop app installs
+  that CLI, so `apps/ui/src-tauri/tauri.conf.json` declares
+  `bundle.macOS.minimumSystemVersion: "13.0"` too (decided 2026-09-26). A generator test binds the
+  Tauri value to `HAPPIER_MIN_MACOS`. The preview and publicdev configs merge over it without
+  overriding `bundle.macOS`.
+- The cask submission candidate is `packaging/homebrew/Casks/happier.rb`. Submit it for the first
+  desktop release built with that minimum. Earlier DMGs declare `LSMinimumSystemVersion` 10.13,
+  which `brew audit --online` would flag against `:ventura`.
+
+- **Layout.** The formula installs the unmodified `cli-v<version>` payload for darwin/linux ×
+  arm64/x64 into `Cellar/happier/<version>/libexec` (the compiled `happier` with its
+  `package-dist`, `node_modules`, `tools` and `scripts`; `skip_clean` keeps Homebrew's cleaner out
+  of it) and links `bin/happier` to it. The runtime root comes from `process.execPath`, which Bun
+  resolves through the links to the real file in the keg, so the payload is found without the
+  managed `~/.happier/cli` layout. Optional runtimes (difftastic, local embeddings) are still
+  acquired on first use into `<happier home>`, as for any install.
+- **Origin.** `describeHappierCliOrigin` recognises Homebrew from the `Cellar/<formula>/` segment of
+  the resolved path. A compiled `happier` reports `argv[1]` as its embedded bundle
+  (`/$bunfs/root/happier`), so the running CLI's package-manager origin
+  (`resolveRunningCliPackageManagerOrigin`, `apps/cli/src/cli/runtime/update/cliUpdateFacts.ts`)
+  reads both the invoked path and `execPath`. `self update` and the K5 update facts consume that
+  one owner: `self update` prints `brew upgrade <formula>` instead of installing a managed copy,
+  and remote `cli.update.v1` refuses with `cli_not_managed`.
+- **Desktop.** A Homebrew `happier` is a CLI the managed layout did not place, so desktop setup asks
+  **Let Happier manage it** / **Keep my own** once ([One CLI per computer](#one-cli-per-computer-plan-r12)).
+- **No `brew services`.** The CLI owns its background service (`happier service install`).
+  The running executable resolves into the versioned keg (`Cellar/<formula>/<version>/…`), which
+  `brew upgrade` cleans up by default, so the service runtime owner
+  (`resolveDaemonServiceInstallRuntimeTarget`) records the same file through Homebrew's opt prefix
+  instead (`<prefix>/opt/<formula>/libexec/happier`, the `optPath` of the brew origin; the opt
+  prefix is a link to the active keg). Like the managed shim, the service launches that binary
+  directly with no entry path. An installed managed shim still takes precedence unless this
+  computer chose **Keep my own**. The expected definition the drift check builds resolves
+  to the same path before and after an upgrade, so an upgrade is not drift; a definition an older
+  CLI wrote with the keg path is ordinary drift between two user-installed launchers (not a
+  managed ↔ user runtime replacement) and is refreshed by `service start`/`restart`.
 
 ## Optional CLI runtimes
 

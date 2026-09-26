@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -82,6 +82,32 @@ describe('readCliUpdateFacts (K5)', () => {
       lastUpdate: null,
       latestVersion: null,
     });
+  });
+
+  it.skipIf(process.platform === 'win32')('never names Homebrew for a CLI that only runs on a Homebrew Node', () => {
+    // Homebrew's Node resolves into its own keg (`Cellar/node/<version>/bin/node`); that keg is
+    // Node's, not this CLI's, so it neither names `brew upgrade node` nor hides the npm install.
+    const nodeKeg = join(homeDir, 'homebrew', 'Cellar', 'node', '22.9.0', 'bin', 'node');
+    mkdirSync(join(nodeKeg, '..'), { recursive: true });
+    writeFileSync(nodeKeg, 'binary');
+    mkdirSync(join(homeDir, 'homebrew', 'opt'), { recursive: true });
+    symlinkSync(join('..', 'Cellar', 'node', '22.9.0'), join(homeDir, 'homebrew', 'opt', 'node'));
+    const packageRoot = join(homeDir, 'homebrew', 'lib', 'node_modules', '@happier-dev', 'cli');
+    mkdirSync(join(packageRoot, 'bin'), { recursive: true });
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/cli' }));
+    writeFileSync(join(packageRoot, 'bin', 'happier.mjs'), '');
+    const checkout = join(homeDir, 'src', 'happier', 'apps', 'cli', 'dist', 'index.mjs');
+    mkdirSync(join(checkout, '..'), { recursive: true });
+    writeFileSync(checkout, '');
+
+    const read = (invokedPath: string) => readCliUpdateFacts({
+      homeDir, publicReleaseRing: 'stable', currentVersion: '1.0.0', execPath: nodeKeg, invokedPath, platform: 'darwin', npmPackageName: '@happier-dev/cli',
+    });
+    expect(read(join(packageRoot, 'bin', 'happier.mjs'))).toMatchObject({
+      installSource: 'npm',
+      updateCommand: 'npm install -g @happier-dev/cli@latest',
+    });
+    expect(read(checkout)).toMatchObject({ installSource: 'other', updateCommand: null });
   });
 
   it('treats a binary outside the managed layout as other, with no command', () => {

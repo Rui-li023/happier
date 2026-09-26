@@ -1,66 +1,49 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resolveInstalledFirstPartyComponentPaths } from '@happier-dev/cli-common/firstPartyRuntime';
 
-import type { DaemonServiceInstallPlan } from './plan';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { previewDaemonServiceInstall } from './installer';
+import { planDaemonServiceInstall } from './plan';
 
-// Only command execution (launchctl) is mocked; planning and discovery run on real files.
-const { applyDaemonServiceInstallPlanMock } = vi.hoisted(() => ({
-  applyDaemonServiceInstallPlanMock: vi.fn(async (_plan: DaemonServiceInstallPlan) => undefined),
-}));
+describe('launchd install reloads a changed CLI definition', () => {
+  afterEach(() => vi.unstubAllEnvs());
 
-vi.mock('./apply', async () => {
-  const actual = await vi.importActual<typeof import('./apply')>('./apply');
-  return { ...actual, applyDaemonServiceInstallPlan: applyDaemonServiceInstallPlanMock };
-});
+  it('reloads a CLI choice change even when the existing service is running', async () => {
+    await withTempDir('happier-service-launchd-reload-', async (userHomeDir) => {
+      const happierHomeDir = join(userHomeDir, '.happier');
+      vi.stubEnv('HAPPIER_HOME_DIR', happierHomeDir);
+      const managedLauncher = resolveInstalledFirstPartyComponentPaths({
+        componentId: 'happier-cli', channel: 'stable', processEnv: process.env,
+      }).shimPaths[0]!;
+      const options = {
+        platform: 'darwin' as const, mode: 'user' as const, channel: 'stable' as const,
+        targetMode: 'pinned' as const, instanceId: 'company', activeServerId: 'company',
+        uid: 501, userHomeDir, happierHomeDir,
+        serverUrl: 'https://company.example.test', webappUrl: 'https://company.example.test',
+        publicServerUrl: 'https://company.example.test', nodePath: '/npm/happier', entryPath: '',
+      };
+      const installed = planDaemonServiceInstall(options).files[0]!;
+      mkdirSync(dirname(installed.path), { recursive: true });
+      writeFileSync(installed.path, installed.content);
 
-describe('installDaemonService on darwin', () => {
-  const userHomeDir = mkdtempSync(join(tmpdir(), 'happier-service-reload-'));
+      const preview = await previewDaemonServiceInstall({
+        ...options, nodePath: managedLauncher, darwinInstallMode: 'kickstart',
+      });
+      expect(preview.exactTargetExists).toBe(true);
+      expect(preview.plan.commands.some((command) => command.args[0] === 'bootstrap')).toBe(true);
 
-  afterEach(() => {
-    rmSync(userHomeDir, { recursive: true, force: true });
-  });
+      // An unchanged loaded definition can keep the ordinary kickstart path.
+      const unchanged = await previewDaemonServiceInstall({ ...options, darwinInstallMode: 'kickstart' });
+      expect(unchanged.plan.commands.map((command) => command.args[0])).toEqual(['kickstart']);
 
-  // A kickstart keeps launchd's loaded (possibly stale) job; a restart must reload the definition.
-  it.each([
-    ['its definition changed', 'stable' as const, {}],
-    ['it runs a daemon from another CLI', 'publicdev' as const, { restartRunningDaemon: true }],
-  ])('reloads the launchd job instead of only kickstarting it when %s', async (_case, installedChannel, restart) => {
-    const install = (channel: 'stable' | 'publicdev') => ({
-      platform: 'darwin' as const,
-      uid: 501,
-      userHomeDir,
-      happierHomeDir: join(userHomeDir, '.happier'),
-      channel,
-      targetMode: 'default-following' as const,
-      instanceId: 'default',
-      autostart: 'at-login' as const,
-      serverUrl: 'https://relay.example.test',
-      webappUrl: 'https://relay.example.test',
-      publicServerUrl: 'https://relay.example.test',
-      nodePath: '/opt/happier/bin/happier',
-      entryPath: '/opt/happier/package-dist/index.mjs',
+      const staleRunningDaemon = await previewDaemonServiceInstall({
+        ...options,
+        darwinInstallMode: 'kickstart',
+        restartRunningDaemon: true,
+      });
+      expect(staleRunningDaemon.plan.commands.some((command) => command.args[0] === 'bootstrap')).toBe(true);
     });
-    const { planDaemonServiceInstall } = await import('./plan');
-    const installed = planDaemonServiceInstall(install(installedChannel)).files[0]!;
-    mkdirSync(dirname(installed.path), { recursive: true });
-    writeFileSync(installed.path, installed.content);
-
-    const { installDaemonService } = await import('./installer');
-    await installDaemonService({
-      ...install('publicdev'),
-      darwinInstallMode: 'kickstart',
-      strategy: 'add',
-      ...restart,
-      runCommands: true,
-      commandFailureMode: 'strict',
-    });
-
-    const commands = (applyDaemonServiceInstallPlanMock.mock.calls.at(-1)?.[0]?.commands ?? [])
-      .map((command) => [command.cmd, ...command.args].join(' '));
-    expect(commands.some((command) => command.startsWith('launchctl bootout'))).toBe(true);
-    expect(commands.some((command) => command.startsWith('launchctl bootstrap'))).toBe(true);
   });
 });

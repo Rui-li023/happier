@@ -5525,9 +5525,9 @@ afterEach(() => {
 
     const fetchMock = vi.fn(async () => ({
       ok: false,
-      status: 400,
-      statusText: 'bad request',
-      text: async () => JSON.stringify({ error: 'invalid_grant' }),
+      status: 503,
+      statusText: 'service unavailable',
+      text: async () => JSON.stringify({ error: 'temporarily_unavailable' }),
     }));
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
@@ -5554,8 +5554,13 @@ afterEach(() => {
       materializationKey: 'session-1',
     });
 
-    await expect(coordinator.tickOnce()).rejects.toThrow(AggregateError);
+    await expect(coordinator.tickOnce()).resolves.toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(api.updateConnectedServiceCredentialHealth).not.toHaveBeenCalled();
+    expect(logRefreshDiagnostic).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'blocked_by_credential_health',
+      reason: 'scheduled',
+    }));
 
     now += 30_000;
     await expect(coordinator.tickOnce()).resolves.toBeUndefined();
@@ -5566,7 +5571,7 @@ afterEach(() => {
     }));
 
     now += 30_000;
-    await expect(coordinator.tickOnce()).rejects.toThrow(AggregateError);
+    await expect(coordinator.tickOnce()).resolves.toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

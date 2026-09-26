@@ -1,3 +1,4 @@
+import type { SessionClientPort } from '@/api/session/sessionClientPort';
 import type { DrainPendingOptions, DrainPendingResult, MessageBatch } from '@/agent/runtime/sessionInput/types';
 import { PendingQueueMaterializationAuthError } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
 import { logger } from '@/ui/logger';
@@ -14,12 +15,17 @@ function shouldPausePumpForArbiterBackpressure(snapshot: ClaudeUnifiedInputArbit
   return snapshot.providerAcceptancePendingCount > 0;
 }
 
+export type ClaudeUnifiedPendingDeliveryState = Pick<
+  SessionClientPort, 'waitForPendingEligibilityUpdate' | 'reconcilePendingQueueState'
+>;
+
 type PumpOnceResult =
   | Readonly<{ kind: 'delivered' }>
   | Readonly<{ kind: 'stopped' }>;
 
 export function createClaudeUnifiedPendingQueuePump<Mode = unknown>(opts: Readonly<{
   inputConsumer: ClaudeUnifiedInputConsumer<Mode>;
+  pendingDeliveryState?: ClaudeUnifiedPendingDeliveryState;
   arbiter: Pick<
     ClaudeUnifiedInputArbiter<Mode>,
     'enqueueUiMessage' | 'drainWhenSafe' | 'snapshot' | 'waitForPendingQueuePumpStateChange'
@@ -111,15 +117,31 @@ export function createClaudeUnifiedPendingQueuePump<Mode = unknown>(opts: Readon
         if (disposed || runOpts.abortSignal.aborted) {
           waitAbortController.abort(runOpts.abortSignal.reason);
         }
-        const keepGoing = await opts.arbiter.waitForPendingQueuePumpStateChange({
-          afterVersion: arbiterSnapshot.pendingQueuePumpStateVersion,
-          abortSignal: waitAbortController.signal,
-        }).finally(() => {
+        let keepGoing: boolean;
+        try {
+          // Arm both owner signals before reconciling: an externally retired head can already
+          // be stale when this pass begins, and no further provider output need ever arrive.
+          const stateChanges = [opts.arbiter.waitForPendingQueuePumpStateChange({
+            afterVersion: arbiterSnapshot.pendingQueuePumpStateVersion,
+            abortSignal: waitAbortController.signal,
+          })];
+          if (opts.pendingDeliveryState) {
+            stateChanges.push(opts.pendingDeliveryState.waitForPendingEligibilityUpdate(waitAbortController.signal));
+          }
+          const changed = Promise.race(stateChanges);
+          if (opts.pendingDeliveryState) {
+            await opts.pendingDeliveryState.reconcilePendingQueueState?.();
+            await opts.arbiter.drainWhenSafe();
+          }
+          keepGoing = await changed;
+        } finally {
+          // Cancel the losing wait as well as the winning one; neither may outlive this pass.
+          waitAbortController.abort('claude-unified-pending-queue-state-pass-complete');
           runOpts.abortSignal.removeEventListener('abort', onAbort);
           if (pausedWaitAbortController === waitAbortController) {
             pausedWaitAbortController = null;
           }
-        });
+        }
         if (!keepGoing) return;
         continue;
       }

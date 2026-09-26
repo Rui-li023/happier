@@ -777,6 +777,44 @@ describe('MobileBottomChromeHost', () => {
         expect(cockpitBar.props.activeSurface).toBe('chat');
     });
 
+    it('releases the reserved chrome height when navigating to a classic session route', async () => {
+        pathState.pathname = '/';
+        settingsState.mobileWorkspaceExperienceV1 = 'classic';
+
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const {
+            SessionCockpitChromeRegistryProvider,
+            useSessionCockpitBottomChromeHeight,
+        } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
+
+        function HeightProbe() {
+            return React.createElement('HeightProbe', {
+                height: useSessionCockpitBottomChromeHeight(),
+            });
+        }
+
+        const screen = await renderScreen(
+            <SessionCockpitChromeRegistryProvider>
+                <MobileBottomChromeHost />
+                <HeightProbe />
+            </SessionCockpitChromeRegistryProvider>,
+        );
+        const chromeLayer = screen.tree.findAllByType('View' as never).find((node) => typeof node.props.onLayout === 'function');
+        expect(chromeLayer).toBeTruthy();
+
+        act(() => {
+            chromeLayer?.props.onLayout({ nativeEvent: { layout: { height: 80 } } });
+        });
+        expect(screen.tree.findByType('HeightProbe' as never).props.height).toBe(80);
+
+        pathState.pathname = '/session/session-1';
+        await act(async () => {
+            notifyPathListeners();
+        });
+
+        expect(screen.tree.findByType('HeightProbe' as never).props.height).toBe(0);
+    });
+
     it('falls back to route replacement for cockpit tab presses before the navigator bridge is ready', async () => {
         pathState.pathname = '/session/session-1/files';
         searchParamsState.id = 'session-1';

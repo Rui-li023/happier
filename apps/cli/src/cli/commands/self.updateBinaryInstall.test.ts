@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS } from '@happier-dev/cli-common/firstPartyRuntime';
@@ -24,6 +24,7 @@ const {
   maybeRunVersionGatedRuntimeMigrationMock: vi.fn(async (_params: unknown) => false),
   quiesceInstalledCliWindowsPayloadOwnersMock: vi.fn(async (_params: unknown) => undefined),
   runManagedCliUpdateMock: vi.fn(async (params: ManagedCliUpdateParams): Promise<ManagedCliUpdateResult> => {
+    params.onAdmitted?.();
     await params.beforeActivate?.();
     await params.restartServiceDaemon?.({ expectedVersion: '9.9.10', phase: 'activated' });
     return { outcome: 'succeeded', previousVersion: '9.9.9', targetVersion: '9.9.10', restarted: params.restartServiceDaemon !== null, changed: true };
@@ -180,5 +181,47 @@ describe('happier self update for binary installs', () => {
     });
     expect(runManagedCliUpdateMock).not.toHaveBeenCalled();
     expect(logs).toContain('brew upgrade happier');
+  });
+
+  it('recognises the Homebrew keg from the compiled binary path when argv only names the embedded bundle', async () => {
+    // A Bun-compiled `happier` reports `argv[1]` as `/$bunfs/root/happier`; only `execPath` (the
+    // resolved executable) says where the payload was installed.
+    const originalExecPath = process.execPath;
+    Object.defineProperty(process, 'execPath', {
+      value: '/opt/homebrew/Cellar/happier/0.2.12/libexec/happier',
+      configurable: true,
+      writable: true,
+    });
+    try {
+      const { logs } = await runSelfUpdate({
+        invokedPath: '/$bunfs/root/happier',
+        rawArgv: ['happier', 'self', 'update'],
+      });
+      expect(runManagedCliUpdateMock).not.toHaveBeenCalled();
+      expect(logs).toContain('brew upgrade happier');
+    } finally {
+      Object.defineProperty(process, 'execPath', { value: originalExecPath, configurable: true, writable: true });
+    }
+  });
+
+  it('reports admission — or the refusal — to the daemon that started it on the admission pipe', async () => {
+    const { FirstPartyPayloadMutationLockError } = await import('@happier-dev/cli-common/firstPartyRuntime');
+    const { UPDATER_ADMISSION_FD_ENV } = await import('@/cli/runtime/update/updaterAdmission');
+    const reportPath = join(homeDir, 'admission');
+
+    process.env[UPDATER_ADMISSION_FD_ENV] = String(openSync(reportPath, 'w'));
+    await runSelfUpdate({ invokedPath: '/opt/happier/bin/happier', rawArgv: ['happier', 'self', 'update'] });
+    expect(readFileSync(reportPath, 'utf8')).toBe('{"admitted":true}\n');
+
+    runManagedCliUpdateMock.mockImplementationOnce(async () => {
+      throw new FirstPartyPayloadMutationLockError({ subject: 'x', holderPid: 42, lockfilePath: '/x.lock' });
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as typeof process.exit);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    process.env[UPDATER_ADMISSION_FD_ENV] = String(openSync(reportPath, 'w'));
+    await expect(runSelfUpdate({ invokedPath: '/opt/happier/bin/happier', rawArgv: ['happier', 'self', 'update'] })).rejects.toThrow('exit 1');
+    expect(JSON.parse(readFileSync(reportPath, 'utf8'))).toMatchObject({ admitted: false, code: 'cli_update_in_progress' });
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 });

@@ -12,6 +12,7 @@ import {
   resolveDefaultManagedReleaseChannelStatePath,
   resolveFirstPartyInstallLayout,
   runManagedCliUpdate,
+  watchLastCliUpdateResult,
   withFirstPartyPayloadMutationLock,
 } from './index.js';
 
@@ -202,5 +203,176 @@ describe('runManagedCliUpdate — the one CLI update transaction', () => {
       restartServiceDaemon: null,
     });
     expect(result).toMatchObject({ outcome: 'succeeded', restarted: false });
+  });
+
+  it('records a failure before activation (release, download, unpack) and changes nothing', async () => {
+    await installInitial('1.0.0');
+    const layout = resolveFirstPartyInstallLayout({ componentId: 'happier-cli', processEnv: env });
+    await expect(runManagedCliUpdate({
+      channel: 'stable',
+      processEnv: env,
+      preparePayload: async () => { throw new Error('GitHub returned 503'); },
+      readVersion: readFixtureVersion,
+      restartServiceDaemon: async () => { throw new Error('must not restart'); },
+    })).rejects.toThrow('GitHub returned 503');
+    expect(readLastCliUpdateResult({ channel: 'stable', processEnv: env })).toMatchObject({
+      targetVersion: null,
+      outcome: 'failed',
+      message: expect.stringContaining('GitHub returned 503'),
+    });
+    expect(await readInstalledVersionMarkers(layout)).toEqual({ currentVersionId: '1.0.0', previousVersionId: null });
+
+    await expect(runManagedCliUpdate({
+      channel: 'stable',
+      processEnv: env,
+      targetVersion: '1.2.0',
+      preparePayload: async () => { throw new Error('checksum signature mismatch'); },
+      readVersion: readFixtureVersion,
+      restartServiceDaemon: null,
+    })).rejects.toThrow('checksum signature mismatch');
+    expect(readLastCliUpdateResult({ channel: 'stable', processEnv: env })).toMatchObject({ targetVersion: '1.2.0', outcome: 'failed' });
+  });
+
+  it('never lets another channel\'s update touch this update\'s recovery launchers', async () => {
+    await installInitial('1.0.0');
+    await installVersionedPayload({
+      componentId: 'happier-cli', channel: 'preview', versionId: '1.0.0-preview.1', processEnv: env,
+      payloadRoot: await createPayload(homeDir, '1.0.0-preview.1'),
+    });
+    const layout = resolveFirstPartyInstallLayout({ componentId: 'happier-cli', processEnv: env });
+    let previewOutcome: unknown = null;
+
+    const result = await runManagedCliUpdate({
+      channel: 'stable',
+      processEnv: env,
+      preparePayload: prepareFrom('2.0.0'),
+      readVersion: readFixtureVersion,
+      restartServiceDaemon: async ({ phase }) => {
+        if (phase !== 'activated') return;
+        // A preview update started while this one waits for the stable service.
+        previewOutcome = await runManagedCliUpdate({
+          channel: 'preview',
+          processEnv: env,
+          preparePayload: prepareFrom('1.1.0-preview.1'),
+          readVersion: readFixtureVersion,
+          restartServiceDaemon: null,
+        }).catch((error: unknown) => error);
+        throw new Error('the stable service did not come back');
+      },
+    });
+
+    expect(previewOutcome).toMatchObject({ code: 'FIRST_PARTY_PAYLOAD_MUTATION_IN_PROGRESS' });
+    expect(result).toMatchObject({ outcome: 'rolledBack', previousVersion: '1.0.0' });
+    expect(await readFile(join(layout.shimDir, binaryName()), 'utf8')).toBe('binary-1.0.0');
+    expect(await readFile(join(layout.shimDir, process.platform === 'win32' ? 'hprev.exe' : 'hprev'), 'utf8')).toBe('binary-1.0.0-preview.1');
+  });
+
+  it('recovers first and records the outcome only after the previous version is proven, even when records cannot be written', async () => {
+    await installInitial('1.0.0');
+    const layout = resolveFirstPartyInstallLayout({ componentId: 'happier-cli', processEnv: env });
+    // `last-update.json` cannot be replaced: every record write fails.
+    await mkdir(join(layout.installRoot, 'last-update.json'), { recursive: true });
+    const restarts: string[] = [];
+    const recordFailures: string[] = [];
+
+    const result = await runManagedCliUpdate({
+      channel: 'stable',
+      processEnv: env,
+      preparePayload: prepareFrom('2.0.0'),
+      readVersion: readFixtureVersion,
+      onRecordFailure: (error) => { recordFailures.push(String(error)); },
+      restartServiceDaemon: async ({ phase, expectedVersion }) => {
+        restarts.push(`${phase}:${expectedVersion}`);
+        if (phase === 'activated') throw new Error('new daemon crashed');
+      },
+    });
+
+    expect(restarts).toEqual(['activated:2.0.0', 'restored:1.0.0']);
+    expect(result).toMatchObject({ outcome: 'rolledBack', previousVersion: '1.0.0' });
+    expect(await readFile(join(layout.shimDir, binaryName()), 'utf8')).toBe('binary-1.0.0');
+    expect(recordFailures.length).toBeGreaterThan(0);
+  });
+
+  it('records rolledBack only after the restored daemon is proven, and failed when it is not', async () => {
+    await installInitial('1.0.0');
+    const seenDuringRestoredRestart: Array<string | null> = [];
+
+    const result = await runManagedCliUpdate({
+      channel: 'stable',
+      processEnv: env,
+      preparePayload: prepareFrom('2.0.0'),
+      readVersion: readFixtureVersion,
+      restartServiceDaemon: async ({ phase }) => {
+        if (phase === 'restored') {
+          seenDuringRestoredRestart.push(readLastCliUpdateResult({ channel: 'stable', processEnv: env })?.outcome ?? null);
+          throw new Error('the restored daemon did not come back either');
+        }
+        throw new Error('new daemon crashed');
+      },
+    });
+
+    expect(seenDuringRestoredRestart).toEqual(['pendingReconnect']);
+    expect(result).toMatchObject({
+      outcome: 'failed',
+      message: expect.stringMatching(/1\.0\.0 was restored.*did not come back either/),
+    });
+    expect(readLastCliUpdateResult({ channel: 'stable', processEnv: env })).toMatchObject({ outcome: 'failed' });
+  });
+
+  it('tells a watcher (the running daemon) whenever an attempt records its end', async () => {
+    await installInitial('1.0.0');
+    let notified: () => void = () => {};
+    const changed = new Promise<void>((resolve) => { notified = resolve; });
+    const stop = watchLastCliUpdateResult({ channel: 'stable', processEnv: env, onChange: () => notified() });
+    expect(stop).not.toBeNull();
+    try {
+      await runManagedCliUpdate({
+        channel: 'stable',
+        processEnv: env,
+        preparePayload: async () => { throw new Error('offline'); },
+        readVersion: readFixtureVersion,
+        restartServiceDaemon: null,
+      }).catch(() => undefined);
+      await changed;
+    } finally {
+      stop?.();
+    }
+    expect(watchLastCliUpdateResult({ channel: 'preview', processEnv: env, onChange: () => {} })).toBeNull();
+  });
+
+  it('admits an attempt (both locks held) before it downloads, and refuses a concurrent one before any download', async () => {
+    await installInitial('1.0.0');
+    const layout = resolveFirstPartyInstallLayout({ componentId: 'happier-cli', processEnv: env });
+    const order: string[] = [];
+    await runManagedCliUpdate({
+      channel: 'stable',
+      processEnv: env,
+      onAdmitted: () => {
+        order.push(`admitted:${existsSync(`${layout.installRoot}.mutation.lock`)}:${existsSync(join(homeDir, 'first-party-activation.lock'))}`);
+      },
+      preparePayload: async () => { order.push('download'); throw new Error('offline'); },
+      readVersion: readFixtureVersion,
+      restartServiceDaemon: null,
+    }).catch(() => undefined);
+    expect(order).toEqual(['admitted:true:true', 'download']);
+
+    const recordBefore = readLastCliUpdateResult({ channel: 'stable', processEnv: env });
+    let downloaded = false;
+    let admitted = false;
+    await withFirstPartyPayloadMutationLock({
+      layout,
+      operation: async () => {
+        await expect(runManagedCliUpdate({
+          channel: 'stable',
+          processEnv: env,
+          onAdmitted: () => { admitted = true; },
+          preparePayload: async () => { downloaded = true; throw new Error('must not download'); },
+          readVersion: readFixtureVersion,
+          restartServiceDaemon: null,
+        })).rejects.toMatchObject({ code: 'FIRST_PARTY_PAYLOAD_MUTATION_IN_PROGRESS' });
+      },
+    });
+    expect({ admitted, downloaded }).toEqual({ admitted: false, downloaded: false });
+    expect(readLastCliUpdateResult({ channel: 'stable', processEnv: env })).toEqual(recordBefore);
   });
 });

@@ -101,8 +101,8 @@ waits for client adoption, self-hosted relay upgrades, daemon drain, migration
 cohorts, or a global cutover.
 
 For desktop setup and managed-CLI/service state, the `desktop-setup` suite
-(`scripts/release/release-assets-e2e/README.md`; selected by release verification
-when it receives a desktop candidate build together with a CLI candidate) runs the
+(`scripts/release/release-assets-e2e/README.md`; it gates the production desktop
+publish in `build-tauri.yml`, using the candidate CLI release) runs the
 hsetup shipped in a Linux desktop artifact against a fresh systemd machine, and
 upgrades a machine set up by the previous published stable desktop + CLI (pinned
 immutable tags) to the candidate. It proves the Linux systemd user-service path

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock();
+    return createTextModuleMock({ translate: (key: string, params?: Record<string, unknown>) => (params ? `${key}:${JSON.stringify(params)}` : key) });
 });
 
 import {
@@ -117,6 +117,14 @@ describe('another machine — Happier CLI row (K5)', () => {
         });
         expect(failedSilently).toMatchObject({ state: 'failed', failure: { kind: 'message', message: 'updates.row.failedGeneric' }, action: { kind: 'run', verb: 'retry' } });
 
+        const couldNotStart = buildRemoteCliUpdateItem({
+            machineId: 'm2', title: 'Happier CLI', online: true, platform: 'darwin', happyCliVersion: '0.2.9',
+            facts: { ...k5, lastUpdate: { targetVersion: null, outcome: 'failed', at: 1, message: 'no release for this channel' } },
+            remoteUpdateAdvertised: true, task: IDLE_TASK,
+        });
+        expect(couldNotStart).toMatchObject({ state: 'failed', action: { kind: 'run', verb: 'retry' } });
+        expect(couldNotStart.failure).toEqual({ kind: 'message', message: 'updates.row.couldNotStart:{"message":"no release for this channel"}' });
+
         const reconnecting = buildRemoteCliUpdateItem({
             machineId: 'm2', title: 'Happier CLI', online: true, platform: 'darwin', happyCliVersion: '0.2.9',
             facts: { ...k5, lastUpdate: { targetVersion: '0.2.11', outcome: 'pendingReconnect', at: 1, message: null } },
@@ -134,6 +142,14 @@ describe('another machine — Happier CLI row (K5)', () => {
 });
 
 describe('agent CLI rows (K6)', () => {
+    it('keeps an unorderable vendor prerelease visible without crashing or offering an update', () => {
+        const item = buildAgentCliUpdateItem({
+            machineId: 'm1', agentId: 'claude', title: 'Claude Code', online: true, task: IDLE_TASK,
+            data: { available: true, version: '2.1.3-beta.1', latestVersion: '2.1.4', installSource: 'managed', updateSupported: true },
+        });
+        expect(item).toMatchObject({ currentVersion: '2.1.3-beta.1', state: 'unknown', action: { kind: 'none' } });
+    });
+
     it('lists an installed agent with its version but claims nothing without a latest version', () => {
         const item = buildAgentCliUpdateItem({
             machineId: 'm1', agentId: 'claude', title: 'Claude Code', online: true, task: IDLE_TASK,
@@ -188,6 +204,17 @@ describe('failed rows keep the executor\'s log', () => {
 });
 
 describe('helper installable rows', () => {
+    it('does not crash or claim up-to-date when an installed helper uses an opaque vendor prerelease', () => {
+        const item = buildInstallableUpdateItem({
+            machineId: 'm1', installableKey: 'gh', title: 'GitHub CLI', online: true, task: IDLE_TASK,
+            data: {
+                installed: true, installedVersion: '2.61.0-beta.1', sourceKind: 'managed', lastInstallLogPath: null, lastBackgroundUpdateCheckAtMs: null,
+                latestVersionCheck: { ok: true, latestVersion: '2.62.0', label: null },
+            },
+        });
+        expect(item).toMatchObject({ currentVersion: '2.61.0-beta.1', state: 'unknown', action: { kind: 'none' } });
+    });
+
     it('offers the upgrade when the installables check found a newer version, and says when it could not check', () => {
         const available = buildInstallableUpdateItem({
             machineId: 'm1', installableKey: 'gh', title: 'GitHub CLI', online: true, task: IDLE_TASK,

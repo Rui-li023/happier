@@ -9,6 +9,33 @@ import YAML from 'yaml';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 
+test('rolling-only promotion jobs prepare artifact verifier dependencies before touching releases', async () => {
+  for (const [workflowFile, jobIds] of [
+    ['publish-cli-binaries.yml', ['promote_existing']],
+    ['publish-hstack-binaries.yml', ['promote_existing']],
+    ['publish-server-runtime.yml', ['promote_existing', 'promote_existing_fresh_runner_retry']],
+    ['publish-ui-web.yml', ['promote_existing']],
+    ['build-tauri.yml', ['promote_stable_feed']],
+  ]) {
+    const raw = await readFile(join(repoRoot, '.github', 'workflows', workflowFile), 'utf8');
+    const workflow = YAML.parse(raw, { prettyErrors: true });
+    for (const jobId of jobIds) {
+      const steps = workflow.jobs[jobId]?.steps ?? [];
+      const corepackIndex = steps.findIndex((step) => step.uses === './.github/actions/enable-corepack-yarn');
+      const installIndex = steps.findIndex((step) => step.uses === './.github/actions/install-yarn-dependencies');
+      const promoteIndex = steps.findIndex((step) => /Re-promote exact verified immutable release bytes|Recover rolling projection from immutable bytes|Promote verified immutable desktop release/.test(String(step.name ?? '')));
+      assert.ok(corepackIndex >= 0 && corepackIndex < installIndex, `${workflowFile}:${jobId} must enable Yarn before dependency installation`);
+      assert.ok(installIndex > 0 && installIndex < promoteIndex, `${workflowFile}:${jobId} must install verifier dependencies before promotion`);
+      assert.deepEqual(
+        new Set(String(steps[installIndex].env?.HAPPIER_INSTALL_SCOPE ?? '').split(',')),
+        new Set(['protocol', 'agents', 'release-runtime', 'cli-common']),
+        `${workflowFile}:${jobId} must include the artifact verifier's workspace dependencies`,
+      );
+      assert.equal(steps[installIndex].env?.GH_TOKEN, undefined);
+    }
+  }
+});
+
 test('release-verify resolves one public profile with explicit suite refinements', async () => {
   const raw = await readFile(join(repoRoot, '.github', 'workflows', 'release-verify.yml'), 'utf8');
   const workflow = YAML.parse(raw, { prettyErrors: true });
@@ -164,6 +191,36 @@ test('release candidate verification runs trusted workflow control bytes under t
     /\$control_dir\/scripts\/pipeline\/release\/lib\/immutable-release-candidate\.mjs/,
   );
   assert.doesNotMatch(String(artifactVerification.run ?? ''), /\$\{\{\s*inputs\./);
+});
+
+test('grouped and independent candidate verifiers install trusted control dependencies before artifact checks', async () => {
+  for (const [workflowFile, jobName] of [
+    ['release-verify.yml', 'verify_candidate'],
+    ['verify-release-resume-candidates.yml', 'verify'],
+  ]) {
+    const workflow = YAML.parse(
+      await readFile(join(repoRoot, '.github', 'workflows', workflowFile), 'utf8'),
+      { prettyErrors: true },
+    );
+    const steps = workflow.jobs[jobName].steps;
+    const firstVerifierIndex = steps.findIndex(
+      (step) => step?.uses === './.release-control/.github/actions/verify-immutable-release-candidate',
+    );
+    const corepackIndex = steps.findIndex((step) => step?.name === 'Enable trusted control Yarn');
+    const installIndex = steps.findIndex((step) => step?.name === 'Install trusted verification dependencies');
+
+    assert.ok(firstVerifierIndex > 0, `${workflowFile} must invoke the shared artifact verifier`);
+    assert.ok(corepackIndex >= 0 && corepackIndex < installIndex, `${workflowFile} must enable Yarn before installation`);
+    assert.ok(installIndex < firstVerifierIndex, `${workflowFile} must install dependencies before artifact verification`);
+    assert.equal(steps[installIndex]['working-directory'], '.release-control');
+    assert.match(steps[installIndex].run, /scripts\/ci\/yarn-install-with-retry\.sh/);
+    assert.deepEqual(
+      new Set(String(steps[installIndex].env.HAPPIER_INSTALL_SCOPE).split(',')),
+      new Set(['protocol', 'agents', 'release-runtime', 'cli-common']),
+    );
+    assert.equal(steps[installIndex].env.GH_TOKEN, undefined);
+    assert.equal(steps[installIndex].env.GITHUB_TOKEN, undefined);
+  }
 });
 
 test('release-verify proves a deployed server loaded the exact candidate revision', async () => {

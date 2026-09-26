@@ -1,4 +1,5 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -205,6 +206,8 @@ posixOnly('a happier this app did not install (R12)', () => {
             formula: 'happier',
             removalCommand: 'brew uninstall happier',
             updateCommand: 'brew upgrade happier',
+            // The origin reads the resolved path, so macOS temp dirs appear under /private.
+            optPath: join(realpathSync(homeDir), 'homebrew', 'opt', 'happier', 'bin', 'happier'),
         });
     });
 

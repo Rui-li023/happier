@@ -17,7 +17,8 @@ export type UpdatesSummaryPhase = 'none' | 'available' | 'running' | 'ready' | '
  * re-read; `pendingRemote` counts only once its row reports the new version.
  */
 export type UnseenUpdateCompletions = ReadonlyMap<string, 'done' | 'pendingRemote'>;
-export type UpdatesSummaryStatus = UpdatesSummaryPhase | 'upToDate' | 'unknown' | 'offline' | 'checking';
+/** `unchecked`: an online machine's tools have not been asked yet — "No known updates", not "up to date". */
+export type UpdatesSummaryStatus = UpdatesSummaryPhase | 'upToDate' | 'unknown' | 'unchecked' | 'offline' | 'checking';
 
 export type UpdatesSummary = Readonly<{
     actionableCount: number;
@@ -30,7 +31,11 @@ export type UpdatesSummary = Readonly<{
     visible: boolean;
 }>;
 
-export function buildUpdatesSummary(items: readonly UpdateItem[], completions: UnseenUpdateCompletions = new Map()): UpdatesSummary {
+export function buildUpdatesSummary(
+    items: readonly UpdateItem[],
+    completions: UnseenUpdateCompletions = new Map(),
+    coverage: Readonly<{ uncheckedMachineCount: number }> = { uncheckedMachineCount: 0 },
+): UpdatesSummary {
     let actionableCount = 0;
     let required = false;
     let runningCount = 0;
@@ -73,11 +78,13 @@ export function buildUpdatesSummary(items: readonly UpdateItem[], completions: U
         ? phase
         : checking
             ? 'checking'
-            : unknown
-                ? 'unknown'
-                : offline
-                    ? 'offline'
-                    : 'upToDate';
+            : coverage.uncheckedMachineCount > 0
+                ? 'unchecked'
+                : unknown
+                    ? 'unknown'
+                    : offline
+                        ? 'offline'
+                        : 'upToDate';
     return { actionableCount, failedCount, runningCount, phase, status, visible: phase !== 'none' };
 }
 
@@ -119,4 +126,10 @@ export function planUpdateAll(items: readonly UpdateItem[]): UpdateAllPlan {
     }));
     const total = machines.reduce((sum, machine) => sum + machine.itemIds.length, 0) + (appItemId ? 1 : 0);
     return { machines, appItemId, total };
+}
+
+/** Field-by-field, so no field can be forgotten when the summary's identity is reused. */
+export function isSameUpdatesSummary(a: UpdatesSummary, b: UpdatesSummary): boolean {
+    const keys = Object.keys(a) as Array<keyof UpdatesSummary>;
+    return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key]);
 }

@@ -112,6 +112,9 @@ export function runCodexDepCapabilityContract<TDepData extends DepDataShape>(
             );
             expect(config.isUpdateAvailable(nonSemver)).toBe(false);
 
+            const vendorPrerelease = buildDepData<TDepData>({ installedVersion: '1.0.0-beta.1' } as Partial<TDepData>);
+            expect(config.isUpdateAvailable(vendorPrerelease)).toBe(false);
+
             const registryErrorData = config.getDepData(
                 buildResults(config.depId, {
                     ok: true,

@@ -1,3 +1,5 @@
+import { PassThrough } from 'node:stream';
+
 import { describe, expect, it } from 'vitest';
 
 import type { CliUpdateFacts } from '@happier-dev/protocol';
@@ -33,7 +35,9 @@ describe('cli.update.v1 hosted by the daemon (remote CLI update)', () => {
       logsDir: '/home/u/.happier/logs',
       spawnDetached: (spawnParams) => {
         spawns.push(spawnParams);
-        return true;
+        const admission = new PassThrough();
+        admission.end('{"admitted":true}\n');
+        return { started: true, admission };
       },
       nowMs: () => 1_700_000_000_000,
     });
@@ -51,6 +55,39 @@ describe('cli.update.v1 hosted by the daemon (remote CLI update)', () => {
     })]);
   });
 
+  it('reports another update in progress instead of started when the updater was refused admission', async () => {
+    const kind = createCliUpdateRemoteTaskKind({
+      readFacts: () => facts(),
+      publicReleaseRing: 'preview',
+      script: '/x/happier',
+      cwd: '/x',
+      logsDir: '/x/logs',
+      spawnDetached: () => {
+        const admission = new PassThrough();
+        admission.end('{"admitted":false,"code":"cli_update_in_progress","message":"Another Happier process is installing or updating it."}\n');
+        return { started: true, admission };
+      },
+    });
+    await expect(run(kind, {})).rejects.toMatchObject({ code: 'cli_update_in_progress', message: expect.stringContaining('Another Happier process') });
+  });
+
+  it('fails by name, naming the log, when the updater exits before admission', async () => {
+    const kind = createCliUpdateRemoteTaskKind({
+      readFacts: () => facts(),
+      publicReleaseRing: 'preview',
+      script: '/x/happier',
+      cwd: '/x',
+      logsDir: '/x/logs',
+      nowMs: () => 7,
+      spawnDetached: () => {
+        const admission = new PassThrough();
+        admission.end();
+        return { started: true, admission };
+      },
+    });
+    await expect(run(kind, {})).rejects.toMatchObject({ code: 'cli_update_start_failed', message: expect.stringContaining('/x/logs/cli-update-7.log') });
+  });
+
   it('fails by name when the updater could not be started', async () => {
     const kind = createCliUpdateRemoteTaskKind({
       readFacts: () => facts(),
@@ -58,7 +95,7 @@ describe('cli.update.v1 hosted by the daemon (remote CLI update)', () => {
       script: '/x/happier',
       cwd: '/x',
       logsDir: '/x/logs',
-      spawnDetached: () => false,
+      spawnDetached: () => ({ started: false, admission: null }),
     });
     await expect(run(kind, {})).rejects.toMatchObject({ code: 'cli_update_start_failed' });
   });

@@ -134,7 +134,7 @@ export const RELEASE_VALIDATION_SUITES = [
     id: 'desktop-setup',
     supportsDirectSource: true,
     supportsUpdateSources: false,
-    supportedDirectSourceKinds: ['published-tag', 'local-build'],
+    supportedDirectSourceKinds: ['published-tag', 'published-channel', 'local-build'],
     executorId: 'desktop-setup',
     timeBudgetMinutes: 10,
   },
@@ -198,15 +198,13 @@ const SUITE_APPLICABILITY = {
     [context.hasPublishedRelayPredecessor === true, 'no published relay predecessor'],
     [context.risks?.relayUpgrade === true, 'no relay-upgrade risk'],
   ]),
-  // The shipped hsetup acquires only a CLI signed with the release key, so the desktop under
-  // test is exercised with the candidate CLI's immutable release. Its upgrade scenario needs a
-  // pinned predecessor, which exists only for a stable (production) candidate
-  // (desktop-setup.mjs resolves ui-desktop-stable/cli-stable); elsewhere it could only BLOCK.
+  // Its upgrade scenario needs a pinned predecessor, which exists only for a stable (production)
+  // candidate (desktop-setup.mjs resolves ui-desktop-stable/cli-stable); elsewhere it could only
+  // BLOCK. A CLI candidate is not required: resolveDesktopSetupCliSource picks the CLI.
   'desktop-setup': (context) => {
     const candidateChannel = String(context.candidateChannel ?? '').trim() || 'unknown';
     return firstUnmet([
       [context.hasDesktopCandidate === true, 'no desktop candidate'],
-      [context.hasCliCandidate === true, 'no CLI candidate'],
       [candidateChannel === 'production', `no pinned ${candidateChannel} predecessor for the upgrade scenario`],
     ]);
   },
@@ -223,6 +221,24 @@ export function resolveReleaseValidationSuiteApplicability(suiteId, context) {
   if (!rule) throw new Error(`Release validation suite ${suiteId} has no applicability owner`);
   const skipReason = rule(context);
   return { selected: skipReason === null, skipReason };
+}
+
+/**
+ * The CLI a desktop-setup run installs: the one users of this desktop would get. The shipped
+ * hsetup acquires only a CLI signed with the release key, so it is the release's candidate CLI
+ * (its immutable tag) when the release has one, otherwise the channel's published CLI, which the
+ * suite pins once to its immutable `cli-v<version>` (desktop-only release).
+ * @param {{ candidateChannel: string; candidateCliVersion: string }} params
+ * @returns {{ kind: 'published-tag' | 'published-channel'; ref: string }}
+ */
+export function resolveDesktopSetupCliSource({ candidateChannel, candidateCliVersion }) {
+  if (String(candidateChannel ?? '').trim() !== 'production') {
+    throw new Error(`desktop-setup runs only for a production candidate (got ${candidateChannel || 'unknown'})`);
+  }
+  const version = String(candidateCliVersion ?? '').trim();
+  if (!version) return { kind: 'published-channel', ref: 'stable' };
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version)) throw new Error(`Invalid candidate CLI version: ${version}`);
+  return { kind: 'published-tag', ref: `cli-v${version}` };
 }
 
 /**

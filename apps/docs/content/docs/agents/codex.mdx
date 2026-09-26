@@ -111,6 +111,8 @@ If you manually switch Codex to plain `mcp` in settings, new sessions can still 
 
 With the App Server backend, Codex uses shared local control with Codex CLI 0.131.0 or newer on macOS and Linux. Happier and the Codex TUI connect to the same running app-server thread, so the app remains writable and can continue handling approvals while the TUI is attached. If a turn is already active, the normal Happier input flow waits before starting the next app turn.
 
+This shared-control flow starts with a Happier session. If you started a thread directly in Codex CLI, Happier cannot join its running app-server by resuming that thread in a separate process: Codex keeps one active writer for the thread. To use both interfaces for a new session, start it in Happier and run `happier attach` on the same machine.
+
 Windows, ACP sessions, and App Server sessions using an older Codex CLI keep the existing exclusive local-control flow. Happier waits for a safe turn boundary before moving those sessions between the app and the terminal.
 
 Codex model availability depends on the active Codex backend, installed runtime, and account state. The new-session engine picker can show the currently available Codex models, model-specific options such as reasoning effort, and favorite Codex model shortcuts when those models are available for the selected backend.

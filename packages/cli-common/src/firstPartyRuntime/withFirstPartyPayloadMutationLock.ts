@@ -1,21 +1,25 @@
 import { randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 
+import { joinPathForPathShape } from '../path/pathShape.js';
 import type { FirstPartyInstallLayout } from './installLayout.js';
 
 export class FirstPartyPayloadMutationLockError extends Error {
   readonly code = 'FIRST_PARTY_PAYLOAD_MUTATION_IN_PROGRESS';
   readonly holderPid: number | null;
 
-  constructor(params: Readonly<{ installRoot: string; holderPid: number | null }>) {
+  constructor(params: Readonly<{ subject: string; holderPid: number | null; lockfilePath: string }>) {
     super(
-      `Another Happier process is installing or updating '${params.installRoot}'`
-      + `${params.holderPid ? ` (pid ${params.holderPid})` : ''}. Try again when it finishes.`,
+      `Another Happier process is installing or updating ${params.subject}`
+      + `${params.holderPid ? ` (pid ${params.holderPid})` : ''}. Try again when it finishes.`
+      + ` If no Happier process is running, remove ${params.lockfilePath}.`,
     );
     this.name = 'FirstPartyPayloadMutationLockError';
     this.holderPid = params.holderPid;
   }
 }
+
+type LockHolder = Readonly<{ pid: number; token: string | null }>;
 
 function readErrorCode(error: unknown): string | null {
   return error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
@@ -23,11 +27,13 @@ function readErrorCode(error: unknown): string | null {
     : null;
 }
 
-async function readHolderPid(lockfilePath: string): Promise<number | null> {
+async function readHolder(lockfilePath: string): Promise<LockHolder | null> {
   try {
     const parsed: unknown = JSON.parse(await readFile(lockfilePath, 'utf8'));
-    const pid = parsed && typeof parsed === 'object' ? Number((parsed as { pid?: unknown }).pid) : Number.NaN;
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const pid = Number((parsed as { pid?: unknown }).pid);
+    const token = (parsed as { token?: unknown }).token;
+    return Number.isInteger(pid) && pid > 0 ? { pid, token: typeof token === 'string' ? token : null } : null;
   } catch {
     return null;
   }
@@ -59,43 +65,116 @@ async function tryCreateLockfile(lockfilePath: string, content: string): Promise
 }
 
 /**
- * The install mutation owner (plan R13 d/f): one process at a time installs into, updates or
- * restores a first-party install root. Same name and call shape as the 0.3 owner; 0.2 has no
- * `proper-lockfile`, so this is the minimal equivalent — a lock file beside the install root that
- * names its holder's pid.
+ * One process at a time holds `lockfilePath`. A second holder fails at once rather than waiting;
+ * a lock whose holder process is gone is reclaimed.
  *
- * A second mutation fails at once with `FIRST_PARTY_PAYLOAD_MUTATION_IN_PROGRESS` rather than
- * waiting: the only concurrent writers are a second click on another surface and an installer run,
- * and either should be told, not queued. A lock whose holder process is gone (a crash, a killed
- * updater) is taken over, so it never needs a staleness timer.
+ * Reclaiming is serialized by `<lock>.reclaim`, created the same exclusive way and never judged
+ * stale itself: two processes that both saw the dead holder cannot both remove the lock — the
+ * second either fails to take the reclaim guard, or takes it after the first finished and then
+ * finds the first's live lock. A reclaim guard left by a crash inside that few-step window blocks
+ * only reclaiming, and the error names the file to remove.
  */
-export async function withFirstPartyPayloadMutationLock<T>(params: Readonly<{
-  layout: FirstPartyInstallLayout;
+async function withOwnedLockfile<T>(params: Readonly<{
+  lockfilePath: string;
+  parentDir: string;
+  subject: string;
   operation: () => Promise<T>;
+  onReleaseFailure?: (error: unknown) => void;
 }>): Promise<T> {
-  const { installRoot, happyHomeDir } = params.layout;
-  const lockfilePath = `${installRoot}.mutation.lock`;
-  await mkdir(happyHomeDir, { recursive: true });
-  const content = `${JSON.stringify({ pid: process.pid, acquiredAt: Date.now() })}\n`;
+  const { lockfilePath, subject } = params;
+  await mkdir(params.parentDir, { recursive: true });
+  const token = randomUUID();
+  const content = `${JSON.stringify({ pid: process.pid, token, acquiredAt: Date.now() })}\n`;
+  const busy = async (path: string = lockfilePath) => new FirstPartyPayloadMutationLockError({
+    subject,
+    holderPid: (await readHolder(path))?.pid ?? null,
+    lockfilePath: path,
+  });
 
   if (!(await tryCreateLockfile(lockfilePath, content))) {
-    const holderPid = await readHolderPid(lockfilePath);
-    if (holderPid !== null && holderPid !== process.pid && isProcessAlive(holderPid)) {
-      throw new FirstPartyPayloadMutationLockError({ installRoot, holderPid });
+    const holder = await readHolder(lockfilePath);
+    if (holder === null || holder.pid === process.pid || isProcessAlive(holder.pid)) {
+      throw await busy();
     }
-    if (holderPid === process.pid) {
-      // This process already holds it: a nested mutation would interleave with its own caller.
-      throw new FirstPartyPayloadMutationLockError({ installRoot, holderPid });
+    const guardPath = `${lockfilePath}.reclaim`;
+    if (!(await tryCreateLockfile(guardPath, content))) {
+      throw await busy(guardPath);
     }
-    await rm(lockfilePath, { force: true });
-    if (!(await tryCreateLockfile(lockfilePath, content))) {
-      throw new FirstPartyPayloadMutationLockError({ installRoot, holderPid: await readHolderPid(lockfilePath) });
+    try {
+      const current = await readHolder(lockfilePath);
+      if (current !== null && (current.pid === process.pid || isProcessAlive(current.pid))) {
+        throw await busy();
+      }
+      await rm(lockfilePath, { force: true });
+      if (!(await tryCreateLockfile(lockfilePath, content))) {
+        throw await busy();
+      }
+    } finally {
+      await rm(guardPath, { force: true });
     }
   }
 
   try {
     return await params.operation();
   } finally {
-    await rm(lockfilePath, { force: true });
+    // Remove only our own lock. A release that fails never replaces the operation's outcome — the
+    // mutation already happened (or already failed) — it is reported as the cleanup failure it is;
+    // the lock it leaves names this process, so the next holder reclaims it once this one exits.
+    try {
+      if ((await readHolder(lockfilePath))?.token === token) {
+        await rm(lockfilePath, { force: true });
+      }
+    } catch (releaseError) {
+      (params.onReleaseFailure ?? reportReleaseFailure)(
+        new Error(`The lock ${lockfilePath} could not be released: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`, { cause: releaseError }),
+      );
+    }
   }
+}
+
+function reportReleaseFailure(error: unknown): void {
+  process.stderr.write(`[happier] ${error instanceof Error ? error.message : String(error)}\n`);
+}
+
+/**
+ * The install mutation owner for one install root (plan R13 d/f): one process at a time installs
+ * into, updates or restores it. Same name and call shape as the 0.3 owner; 0.2 has no
+ * `proper-lockfile`, so this is the minimal equivalent — `<installRoot>.mutation.lock` naming its
+ * holder's pid. Concurrent writers are a second click on another surface or an installer run, and
+ * either should be told, not queued, so a busy lock fails at once
+ * (`FIRST_PARTY_PAYLOAD_MUTATION_IN_PROGRESS`) and needs no staleness timer.
+ */
+export async function withFirstPartyPayloadMutationLock<T>(params: Readonly<{
+  layout: FirstPartyInstallLayout;
+  operation: () => Promise<T>;
+  /** A release that failed after the operation settled; the default reports it on stderr. */
+  onReleaseFailure?: (error: unknown) => void;
+}>): Promise<T> {
+  return await withOwnedLockfile({
+    lockfilePath: `${params.layout.installRoot}.mutation.lock`,
+    parentDir: params.layout.happyHomeDir,
+    subject: `'${params.layout.installRoot}'`,
+    operation: params.operation,
+    onReleaseFailure: params.onReleaseFailure,
+  });
+}
+
+/**
+ * The home-wide activation owner: command shims (`<home>/bin`), the default-channel record and the
+ * update transactions' set-aside launchers are shared by every channel's install, so any activation
+ * that writes them — and an update transaction from capture to commit or restore — holds this one
+ * lock (`<home>/first-party-activation.lock`), inside its install root's lock.
+ */
+export async function withFirstPartyActivationLock<T>(params: Readonly<{
+  happyHomeDir: string;
+  operation: () => Promise<T>;
+  onReleaseFailure?: (error: unknown) => void;
+}>): Promise<T> {
+  return await withOwnedLockfile({
+    lockfilePath: joinPathForPathShape(params.happyHomeDir, 'first-party-activation.lock'),
+    parentDir: params.happyHomeDir,
+    subject: `the Happier commands in '${params.happyHomeDir}'`,
+    operation: params.operation,
+    onReleaseFailure: params.onReleaseFailure,
+  });
 }

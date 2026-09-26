@@ -1,6 +1,6 @@
-import type { CapabilityDetectRequest, CapabilityDetectResult, CapabilityId } from '@/sync/api/capabilities/capabilitiesProtocol';
+import type { CapabilitiesDetectRequest, CapabilityDetectRequest, CapabilityDetectResult, CapabilityId } from '@/sync/api/capabilities/capabilitiesProtocol';
 import type { CapabilitiesInvokeRequest } from '@/sync/api/capabilities/capabilitiesProtocol';
-import { getMachineCapabilitiesSnapshot, prefetchMachineCapabilities } from '@/hooks/server/useMachineCapabilitiesCache';
+import { getMachineCapabilitiesSnapshot, prefetchMachineCapabilities, prefetchMachineCapabilitiesIfStale } from '@/hooks/server/useMachineCapabilitiesCache';
 import { machineCapabilitiesInvoke } from '@/sync/ops';
 import { getAgentResumeExperimentsFromSettings, getNewSessionRelevantInstallableDepKeys, type AgentId } from '@/agents/catalog/catalog';
 import type { Settings } from '@/sync/domains/settings/settings';
@@ -9,7 +9,8 @@ import { resolveInstallablePolicy } from '@happier-dev/protocol/installablesPoli
 import { getInstallablesRegistryEntries } from './installablesRegistry';
 import { planInstallablesBackgroundActions } from './installablesBackgroundPlan';
 import { buildAgentCliCapabilityId } from './agentCliCapabilityId';
-import { isLatestVersionCheckDue } from '@/updates/latestVersionCheckFreshness';
+import { isLatestVersionCheckDue, LATEST_VERSION_CHECK_FRESH_MS } from '@/updates/latestVersionCheckFreshness';
+import { buildMachineUpdateFactsRequest } from './requests';
 
 type MachineCapabilitiesSnapshotLike = ReturnType<typeof getMachineCapabilitiesSnapshot>;
 
@@ -255,4 +256,28 @@ export async function ensureAgentInstallablesBackground(
             // Best-effort: capabilities refresh can fail without breaking the flow.
         }
     }
+}
+
+/**
+ * R13 (e) — the update facts of every installed agent CLI and helper on these machines, so the
+ * Updates summary covers tools nobody has opened a session with. One request per machine through
+ * the capability cache's own freshness (`LATEST_VERSION_CHECK_FRESH_MS`, plus "an Updates request
+ * is unmet while a K6 daemon's answer lacks the latest version"); nothing re-asks on a timer.
+ * The Updates surface asks through here too, so there is one collector.
+ */
+export async function ensureMachineUpdateFactsBackground(
+    opts: Readonly<{ machineIds: readonly string[]; serverId?: string | null }>,
+    depsOverrides: Partial<Readonly<{ prefetchMachineCapabilitiesIfStale: typeof prefetchMachineCapabilitiesIfStale }>> = {},
+): Promise<void> {
+    const prefetch = depsOverrides.prefetchMachineCapabilitiesIfStale ?? prefetchMachineCapabilitiesIfStale;
+    const request = buildMachineUpdateFactsRequest();
+    await Promise.all(opts.machineIds.map((machineId) => prefetch({
+        machineId,
+        serverId: opts.serverId,
+        staleMs: LATEST_VERSION_CHECK_FRESH_MS,
+        request,
+    }).catch(() => {
+        // Best-effort like every background step here: the row keeps its last answer, and the
+        // summary says "not checked" for a machine that has none.
+    })));
 }

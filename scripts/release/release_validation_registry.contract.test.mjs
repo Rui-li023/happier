@@ -10,6 +10,7 @@ import {
   resolveReleaseValidationSuite,
   resolveReleaseValidationSuiteApplicability,
   resolveReleaseValidationSuiteTimeoutMinutes,
+  resolveDesktopSetupCliSource,
 } from '../pipeline/release-validation/registry.mjs';
 
 test('release-validation registry exposes the canonical suite and source ids', () => {
@@ -116,9 +117,8 @@ test('desktop-setup gates the desktop build, not release verification, exactly w
     ...overrides,
   });
   assert.deepEqual(gate({}), { selected: true, skipReason: null });
-  // The shipped hsetup only acquires a CLI signed with the real key: without a CLI candidate
-  // there is nothing it can install, so the suite is skipped rather than run against a guess.
-  assert.deepEqual(gate({ hasCliCandidate: false }), { selected: false, skipReason: 'no CLI candidate' });
+  // A desktop-only release still gates: its hsetup installs the published channel CLI.
+  assert.deepEqual(gate({ hasCliCandidate: false }), { selected: true, skipReason: null });
   assert.deepEqual(gate({ hasDesktopCandidate: false }), { selected: false, skipReason: 'no desktop candidate' });
   // Its upgrade scenario needs a pinned predecessor, which only a production candidate has.
   for (const candidateChannel of ['preview', 'dev', undefined]) {
@@ -126,6 +126,20 @@ test('desktop-setup gates the desktop build, not release verification, exactly w
     assert.match(String(gate({ candidateChannel }).skipReason), /no pinned (preview|dev|unknown) predecessor/);
   }
   assert.throws(() => resolveReleaseValidationSuiteApplicability('daemon-continuity', {}), /no applicability owner/);
+});
+
+test('desktop-setup tests the CLI users would get: the candidate, else the published channel CLI', () => {
+  assert.deepEqual(
+    resolveDesktopSetupCliSource({ candidateChannel: 'production', candidateCliVersion: '0.2.13' }),
+    { kind: 'published-tag', ref: 'cli-v0.2.13' },
+  );
+  // No CLI in this release: the current cli-stable, which the suite pins once to its cli-v<version>.
+  assert.deepEqual(
+    resolveDesktopSetupCliSource({ candidateChannel: 'production', candidateCliVersion: '' }),
+    { kind: 'published-channel', ref: 'stable' },
+  );
+  assert.throws(() => resolveDesktopSetupCliSource({ candidateChannel: 'production', candidateCliVersion: 'latest' }), /candidate CLI version/);
+  assert.throws(() => resolveDesktopSetupCliSource({ candidateChannel: 'preview', candidateCliVersion: '' }), /production/);
 });
 
 test('a budgeted suite hard-stops at a timeout derived from its registry budget', () => {

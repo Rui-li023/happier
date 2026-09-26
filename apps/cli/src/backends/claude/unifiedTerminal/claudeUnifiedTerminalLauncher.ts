@@ -1167,6 +1167,10 @@ export async function claudeUnifiedTerminalLauncher(
         ?? { keys: new Set<string>(), complete: true, oldestCoveredAtMs: null },
       // Unknown canonical state (no accessor) counts as ACTIVE (fail-closed).
       isCanonicalTurnActive: () => session.client.hasActiveCanonicalTurn?.() ?? true,
+      pendingDeliveryState: {
+        waitForPendingEligibilityUpdate: session.client.waitForPendingEligibilityUpdate.bind(session.client),
+        reconcilePendingQueueState: session.client.reconcilePendingQueueState?.bind(session.client),
+      },
       resolvePromptDeliveryState: (batch) => {
         const localId = batch.userMessageLocalIds?.length === 1
           ? batch.userMessageLocalIds[0]

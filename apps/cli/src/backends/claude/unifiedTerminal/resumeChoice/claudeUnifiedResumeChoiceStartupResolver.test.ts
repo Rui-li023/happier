@@ -4,6 +4,8 @@ import { createPermissionHandlerSessionStub } from '../../utils/permissionHandle
 import { createFakeControlPort } from '../tuiControls/fakeControlPort';
 import { parseClaudeScreenState } from '../tuiControls/screenState';
 import { ClaudeUnifiedDialogChoiceBroker } from '../dialogChoice/claudeUnifiedDialogChoiceBroker';
+import { createClaudeUnifiedDialogChoiceScreenProbe } from '../dialogChoice/claudeUnifiedDialogChoiceScreenProbe';
+import { CLAUDE_UNIFIED_DIALOG_CHOICE_QUESTION } from '../dialogChoice/claudeUnifiedDialogChoiceBroker';
 import { resolveClaudeUnifiedVisibleDialog } from '../tuiControls/dialogRegistry';
 import { createClaudeUnifiedResumeChoiceStartupResolver } from './claudeUnifiedResumeChoiceStartupResolver';
 
@@ -100,6 +102,56 @@ describe('createClaudeUnifiedResumeChoiceStartupResolver', () => {
     })).resolves.toEqual({ status: 'waiting_for_user' });
 
     await broker.dispose();
+  });
+
+  it.each(['manual', 'automatic'] as const)('keeps readiness paused while a %s answer is being applied', async (mode) => {
+    const { session, client } = createPermissionHandlerSessionStub('trust-answer-in-flight');
+    Object.assign(session, {
+      accountSettings: mode === 'automatic'
+        ? { claudeUnifiedTerminalWorkspaceTrust: 'always_trust_happier_workspaces' }
+        : null,
+    });
+    const broker = new ClaudeUnifiedDialogChoiceBroker(session, { createRequestId: () => 'trust-answer' });
+    const screen = ['Do you trust the files in this folder?', '❯ No, exit', '  Yes, I trust this folder', 'Enter to confirm · Esc to cancel'].join('\n');
+    const selected = screen.replace('❯ No, exit', '  No, exit').replace('  Yes, I trust this folder', '❯ Yes, I trust this folder');
+    let releaseNavigation!: () => void;
+    const navigation = new Promise<void>((resolve) => { releaseNavigation = resolve; });
+    const port = createFakeControlPort({
+      captures: [screen, screen, selected, IDLE],
+      onSendSpecialKey: async (key) => { if (key === 'ArrowDown') await navigation; },
+    });
+    const probe = createClaudeUnifiedDialogChoiceScreenProbe({
+      broker, port, wait: async () => undefined, graceMs: 0, settleMs: 0,
+      verifyPollIntervalMs: 1, verifyPollTimeoutMs: 8,
+      isDialogOwned: () => false,
+    });
+    const resolver = createClaudeUnifiedResumeChoiceStartupResolver({
+      choice: 'ask_every_time', broker, port, wait: async () => undefined, settleMs: 0,
+    });
+    const resolve = () => resolver({
+      screenState: parseClaudeScreenState(screen), observedAtMs: 1,
+      abortSignal: new AbortController().signal,
+    });
+    try {
+      await probe.evaluateScreenState(parseClaudeScreenState(screen));
+      if (mode === 'manual') {
+        await vi.waitFor(() => expect(client.getAgentStateSnapshot().requests['trust-answer']).toBeDefined());
+        await client.rpcHandlerManager.getHandler('permission')?.({
+          id: 'trust-answer', approved: true,
+          answers: { [CLAUDE_UNIFIED_DIALOG_CHOICE_QUESTION]: 'trust_once' },
+        });
+      }
+      await vi.waitFor(() => expect(port.sentKeys).toEqual(['ArrowDown']));
+      expect(broker.hasPendingChoice()).toBe(false);
+      await expect(resolve()).resolves.toEqual({ status: 'waiting_for_user' });
+      releaseNavigation();
+      await vi.waitFor(() => expect(port.sentKeys).toEqual(['ArrowDown', 'Enter']));
+      await vi.waitFor(async () => expect(await resolve()).toEqual({ status: 'unhandled' }));
+    } finally {
+      releaseNavigation();
+      probe.dispose();
+      await broker.dispose();
+    }
   });
 
   it('keeps readiness paused after terminal actuation fails while the same dialog remains visible', async () => {

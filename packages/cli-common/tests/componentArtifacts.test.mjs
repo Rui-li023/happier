@@ -4,6 +4,8 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import cliDistBuildManifest from '../cliDistBuildManifest.cjs';
+
 async function acceptWorkspacePackageFixtures(_repoRoot, packageNames) {
   return { ok: true, built: [], skipped: [...packageNames] };
 }
@@ -320,6 +322,7 @@ test('buildCliBinaryArtifactPayload compiles the local CLI binary into the paylo
     writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ name: 'repo', private: true }, null, 2));
     writeCliRuntimePackageFixture(repoRoot);
     writeFileSync(join(cliDistDir, 'index.mjs'), 'console.log("cli");\n', 'utf8');
+    cliDistBuildManifest.writeCliDistBuildManifest(join(cliDistDir, 'index.mjs'));
     writeFileSync(join(cliScriptsDir, 'childProcessOptions.cjs'), 'module.exports = { withWindowsHide: (input) => input };\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'claude_launcher_runtime.cjs'), 'module.exports = { getClaudeCliPath: () => "claude", runClaudeCli: () => {} };\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'claude_local_launcher.cjs'), 'require("./claude_launcher_runtime.cjs");\n', 'utf8');
@@ -383,8 +386,8 @@ test('buildCliBinaryArtifactPayload compiles the local CLI binary into the paylo
         mkdirSync(cliDistDir, { recursive: true });
         writeFileSync(join(cliDistDir, 'index.mjs'), 'console.log("cli");\n', 'utf8');
       },
-      compileBinary: async ({ outfile, externals }) => {
-        compileCalls.push({ outfile, externals });
+      compileBinary: async ({ outfile, externals, autoloadDotenv }) => {
+        compileCalls.push({ outfile, externals, autoloadDotenv });
         writeFileSync(outfile, '#!/bin/sh\necho happier\n', 'utf8');
       },
     });
@@ -393,6 +396,7 @@ test('buildCliBinaryArtifactPayload compiles the local CLI binary into the paylo
     assert.equal(result.entrypoint, 'happier');
     assert.deepEqual(runCalls, []);
     assert.equal(compileCalls.length, 1);
+    assert.equal(compileCalls[0].autoloadDotenv, false);
     assert.deepEqual(compileCalls[0].externals.sort(), [
       '@homebridge/node-pty-prebuilt-multiarch',
       '@huggingface/transformers',

@@ -82,12 +82,14 @@ export type { FirstPartyPruneRetainedVersionsResult } from './pruneRetainedVersi
 
 export {
   FirstPartyPayloadMutationLockError,
+  withFirstPartyActivationLock,
   withFirstPartyPayloadMutationLock,
 } from './withFirstPartyPayloadMutationLock.js';
 export {
   ManagedCliUpdateError,
   readLastCliUpdateResult,
   runManagedCliUpdate,
+  watchLastCliUpdateResult,
 } from './runManagedCliUpdate.js';
 export type {
   ManagedCliUpdateParams,

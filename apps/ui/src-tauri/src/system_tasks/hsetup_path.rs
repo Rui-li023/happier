@@ -95,6 +95,41 @@ fn resolve_candidate_variants(path: &std::path::Path) -> Vec<PathBuf> {
     out
 }
 
+/// Where to look for hsetup, in order. A packaged build finds its own copy first: the bundle's
+/// resources (Linux ships it there as a `.gz` resource), then beside the executable (macOS
+/// `../Resources`, Windows next to the exe). The compile-time checkout (`CARGO_MANIFEST_DIR/binaries`)
+/// is a development convenience only: a release build never consults it, so a build machine's
+/// checkout cannot stand in for the bundle it produced.
+fn hsetup_candidates(
+    checkout_dir: Option<&std::path::Path>,
+    resource_dir: Option<&std::path::Path>,
+    exe_dir: Option<&std::path::Path>,
+    hsetup_filename: &str,
+    base_filename: &str,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(checkout_dir) = checkout_dir {
+        // `tauri dev` runs from the checkout, where the sidecar build writes the helper.
+        candidates.push(checkout_dir.join("binaries").join(hsetup_filename));
+        candidates.push(checkout_dir.join("binaries").join(base_filename));
+    }
+    if let Some(resource_dir) = resource_dir {
+        extend_candidates_with_resource_dir(
+            &mut candidates,
+            resource_dir,
+            hsetup_filename,
+            base_filename,
+        );
+    }
+    if let Some(exe_dir) = exe_dir {
+        candidates.push(exe_dir.join(hsetup_filename));
+        candidates.push(exe_dir.join(base_filename));
+        candidates.push(exe_dir.join("../Resources").join(hsetup_filename));
+        candidates.push(exe_dir.join("../Resources").join(base_filename));
+    }
+    candidates
+}
+
 pub fn resolve_hsetup_path(app: &AppHandle) -> Result<PathBuf, String> {
     let base_filename = if HSETUP_FILENAME.ends_with(".exe") {
         "hsetup.exe"
@@ -102,32 +137,18 @@ pub fn resolve_hsetup_path(app: &AppHandle) -> Result<PathBuf, String> {
         "hsetup"
     };
 
-    let mut candidates = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("binaries")
-        .join(HSETUP_FILENAME)];
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries")
-            .join(base_filename),
+    let checkout_dir = cfg!(debug_assertions).then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    let resource_dir = app.path().resource_dir().ok();
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    let candidates = hsetup_candidates(
+        checkout_dir.as_deref(),
+        resource_dir.as_deref(),
+        exe_dir.as_deref(),
+        HSETUP_FILENAME,
+        base_filename,
     );
-
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        extend_candidates_with_resource_dir(
-            &mut candidates,
-            &resource_dir,
-            HSETUP_FILENAME,
-            base_filename,
-        );
-    }
-
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(parent) = current_exe.parent() {
-            candidates.push(parent.join(HSETUP_FILENAME));
-            candidates.push(parent.join(base_filename));
-            candidates.push(parent.join("../Resources").join(HSETUP_FILENAME));
-            candidates.push(parent.join("../Resources").join(base_filename));
-        }
-    }
 
     let checked_paths = candidates
         .iter()
@@ -179,6 +200,40 @@ mod tests {
         assert!(candidates
             .iter()
             .any(|path| path == &resource_dir.join("binaries").join("hsetup")));
+    }
+
+    #[test]
+    fn packaged_builds_resolve_resources_and_never_the_checkout() {
+        let checkout = std::path::Path::new("/checkout/apps/ui/src-tauri");
+        let resources = std::path::Path::new("/opt/Happier/usr/lib/Happier");
+        let exe_dir = std::path::Path::new("/opt/Happier/usr/bin");
+        let name = "hsetup-x86_64-unknown-linux-gnu";
+
+        // Release (no checkout): the bundle's resources come first, then beside the executable.
+        let release = hsetup_candidates(None, Some(resources), Some(exe_dir), name, "hsetup");
+        assert_eq!(release.first(), Some(&resources.join(name)));
+        assert!(release.iter().all(|path| !path.starts_with(checkout)));
+        let first_exe = release
+            .iter()
+            .position(|path| path.starts_with(exe_dir))
+            .unwrap();
+        assert!(release[..first_exe]
+            .iter()
+            .all(|path| path.starts_with(resources)));
+
+        // Development: the checkout's freshly built helper is still found first.
+        let development = hsetup_candidates(
+            Some(checkout),
+            Some(resources),
+            Some(exe_dir),
+            name,
+            "hsetup",
+        );
+        assert_eq!(
+            development.first(),
+            Some(&checkout.join("binaries").join(name))
+        );
+        assert_eq!(&development[2..], &release[..]);
     }
 
     #[test]

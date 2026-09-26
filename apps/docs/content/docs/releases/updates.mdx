@@ -134,8 +134,10 @@ happier self update --to 0.1.2
 `self update` downloads the release and verifies its signature, checks that the new `happier`
 starts on this machine before switching to it, and — when the background service is running —
 restarts the service on the new version. If the service does not come back on it, the previous
-version is put back and restarted, and the update reports that it was rolled back. `--to` takes an
-exact published version. This works the same on macOS, Linux and Windows.
+version is put back and restarted, and the update reports that it was rolled back (or, if even the
+previous version does not come back, that it failed). `--to` takes an exact published version. On
+Windows, `self update` stops the background service and ends running sessions before it switches
+versions, as the installer does.
 
 Rerunning the installer is also a valid update path:
 

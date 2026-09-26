@@ -102,6 +102,7 @@ export function createClaudeUnifiedDialogChoiceScreenProbe(params: Readonly<{
     abortController = taskAbortController;
     params.broker.activate();
     const signal = taskAbortController.signal;
+    if (automaticDecision) params.broker.noteTerminalAnswerStarted(dialog);
     const task = (automaticDecision
       ? Promise.resolve(automaticDecision)
       : params.broker.requestDialogChoice({ dialog, signal }))

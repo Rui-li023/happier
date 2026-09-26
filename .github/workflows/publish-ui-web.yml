@@ -545,6 +545,15 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
+      - name: Enable trusted control Yarn
+        uses: ./.github/actions/enable-corepack-yarn
+      - name: Install artifact verifier dependencies
+        uses: ./.github/actions/install-yarn-dependencies
+        env:
+          YARN_PRODUCTION: 'false'
+          npm_config_production: 'false'
+          HAPPIER_INSTALL_SCOPE: protocol,agents,release-runtime,cli-common
+          HAPPIER_UI_VENDOR_WEB_ASSETS: '0'
       - name: Create narrowly scoped publish token
         id: app_token
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547

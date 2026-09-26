@@ -47,7 +47,7 @@ on:
         default: ""
         type: string
       candidate_cli_version:
-        description: "CLI candidate — Published cli-v<version> the Linux desktop-setup gate installs (production)"
+        description: "CLI candidate — Published cli-v<version> for the desktop-setup gate (empty: current cli-stable)"
         required: false
         default: ""
         type: string
@@ -80,7 +80,8 @@ on:
         default: ""
         type: string
       # The immutable cli-v<version> release this desktop's hsetup installs in the desktop-setup
-      # gate. Empty = no CLI candidate (the registry then skips the gate, with that reason).
+      # gate. Empty = a desktop-only release: the gate installs the published cli-stable instead,
+      # pinned once to its cli-v<version> (what users of this desktop would get).
       candidate_cli_version:
         required: false
         default: ""
@@ -795,8 +796,9 @@ jobs:
   desktop_setup:
     name: Desktop setup gate (Linux x86_64, Docker systemd)
     # A real first-run setup and upgrade of the just-finalized Linux bundle, before any desktop
-    # publish. The release-validation registry decides whether it applies (production desktop +
-    # CLI candidate); otherwise it reports the skip reason and succeeds without running.
+    # publish. The release-validation registry decides whether it applies (a production desktop)
+    # and which CLI it installs (the candidate, else the published channel CLI); otherwise it
+    # reports the skip reason and succeeds without running.
     if: ${{ !cancelled() && needs.resolve_source.result == 'success' && needs.finalize.result == 'success' }}
     needs: [resolve_source, finalize]
     # Linux desktop bundles ship for x86_64 only; hosted ubuntu runners are x86_64 with Docker.
@@ -829,7 +831,7 @@ jobs:
           node scripts/pipeline/release-validation/resolve-validation-plan.mjs \
             --suite desktop-setup \
             --has-desktop-candidate true \
-            --has-cli-candidate "$([[ -n "$CANDIDATE_CLI_VERSION" ]] && echo true || echo false)" \
+            --candidate-cli-version "$CANDIDATE_CLI_VERSION" \
             --candidate-channel "$RELEASE_ENVIRONMENT" \
             --github-output "$GITHUB_OUTPUT"
 
@@ -865,7 +867,8 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         timeout-minutes: ${{ fromJSON(steps.plan.outputs.timeout_minutes) }}
         env:
-          CANDIDATE_CLI_VERSION: ${{ inputs.candidate_cli_version }}
+          CLI_SOURCE: ${{ steps.plan.outputs.cli_source }}
+          CLI_REF: ${{ steps.plan.outputs.cli_ref }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -878,8 +881,8 @@ jobs:
           node scripts/pipeline/run.mjs release-validate \
             --suite desktop-setup \
             --platform linux \
-            --source published-tag \
-            --ref "cli-v${CANDIDATE_CLI_VERSION}" \
+            --source "${CLI_SOURCE}" \
+            --ref "${CLI_REF}" \
             --desktop-artifact "${desktop_artifact}"
 
       - name: Upload desktop-setup summary
@@ -944,6 +947,10 @@ jobs:
       assets_dir: dist/ui-desktop-assets/ui-desktop-v
       clobber: false
 
+  # retry_version is an explicit exception to the desktop_setup gate: it re-promotes an existing
+  # immutable ui-desktop-v<version> release to the stable feed without rebuilding. Re-promoting
+  # previously released bytes is a recovery operation (docs/release-process.md), not a new
+  # publication; those bytes were gated when publish_stable_release first published them.
   promote_stable_feed:
     name: Promote immutable desktop release to stable feed
     if: ${{ !cancelled() && needs.resolve_source.result == 'success' && inputs.publish_release == true && inputs.environment == 'production' && (needs.publish_stable_release.result == 'success' || needs.resolve_source.outputs.retry_version != '') }}
@@ -966,6 +973,17 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable trusted control Yarn
+        uses: ./.github/actions/enable-corepack-yarn
+
+      - name: Install artifact verifier dependencies
+        uses: ./.github/actions/install-yarn-dependencies
+        env:
+          YARN_PRODUCTION: 'false'
+          npm_config_production: 'false'
+          HAPPIER_INSTALL_SCOPE: protocol,agents,release-runtime,cli-common
+          HAPPIER_UI_VENDOR_WEB_ASSETS: '0'
 
       - name: Install minisign
         uses: ./.github/actions/bootstrap-minisign

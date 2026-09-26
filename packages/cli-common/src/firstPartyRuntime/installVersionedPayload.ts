@@ -16,7 +16,7 @@ import { syncInstalledFirstPartyShims } from './syncInstalledFirstPartyShims.js'
 import { joinPathForPathShape } from '../path/pathShape.js';
 import { resolveFirstPartyInstallLayout, resolveFirstPartyVersionInstallPath, type FirstPartyInstallLayout } from './installLayout.js';
 import { readInstalledVersionMarkers } from './versionMarkers.js';
-import { withFirstPartyPayloadMutationLock } from './withFirstPartyPayloadMutationLock.js';
+import { withFirstPartyActivationLock, withFirstPartyPayloadMutationLock } from './withFirstPartyPayloadMutationLock.js';
 
 function readErrorCode(error: unknown): string | null {
   if (typeof error !== 'object' || error === null || !('code' in error)) {
@@ -192,9 +192,15 @@ export async function installVersionedPayload(params: FirstPartyAcquisitionOptio
     processEnv: params.processEnv,
   });
 
+  // Components with command shims or the default-channel record write the home-wide activation
+  // domain too (`<home>/bin`, `default-cli-release-channel.json`), so they also hold its lock.
+  const writesSharedActivationState = layout.installShims.length > 0 || shouldPersistDefaultManagedReleaseChannel(params.componentId);
+  const withSharedActivationLock = async <T>(operation: () => Promise<T>): Promise<T> => writesSharedActivationState
+    ? await withFirstPartyActivationLock({ happyHomeDir: layout.happyHomeDir, operation })
+    : await operation();
   return await withFirstPartyPayloadMutationLock({
     layout,
-    operation: async () => {
+    operation: async () => await withSharedActivationLock(async () => {
       try {
         return await installVersionedPayloadOnce(params);
       } catch (error) {
@@ -213,7 +219,7 @@ export async function installVersionedPayload(params: FirstPartyAcquisitionOptio
           payloadRoot: retryPayloadRoot,
         });
       }
-    },
+    }),
   });
 }
 

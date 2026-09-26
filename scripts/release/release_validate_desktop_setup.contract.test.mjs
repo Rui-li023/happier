@@ -40,6 +40,12 @@ test('release-validate plans desktop-setup local builds from the CLI release ass
   assert.deepEqual(JSON.parse(out.stdout).execution.args.slice(3), ['--cli-assets-dir', resolve(repoRoot, 'dist', 'release-assets', 'cli'), '--channel', 'preview']);
 });
 
+test('release-validate plans desktop-setup against the published channel CLI for a desktop-only release', () => {
+  const out = dryRun(['--platform', 'linux', '--source', 'published-channel', '--ref', 'stable', '--desktop-artifact', 'dist/tauri/app.deb']);
+  assert.equal(out.status, 0, out.stderr);
+  assert.deepEqual(JSON.parse(out.stdout).execution.args.slice(3), ['--cli-channel', 'stable']);
+});
+
 test('release-validate refuses desktop-setup without an artifact, off Linux, or from a rolling tag', () => {
   assert.match(dryRun(['--platform', 'linux', '--source', 'published-tag', '--ref', 'cli-v0.2.13']).stderr, /--desktop-artifact/);
   assert.match(dryRun(['--platform', 'darwin', '--source', 'published-tag', '--ref', 'cli-v0.2.13', '--desktop-artifact', 'a.deb']).stderr, /--platform linux only/);
@@ -103,7 +109,7 @@ test('build-tauri gates the production desktop publish on desktop-setup against 
   assert.match(String(plan.run), /resolve-validation-plan\.mjs/);
   assert.match(String(plan.run), /--suite desktop-setup/);
   assert.match(String(plan.run), /--has-desktop-candidate true/);
-  assert.match(String(plan.run), /--has-cli-candidate "\$\(\[\[ -n "\$CANDIDATE_CLI_VERSION" \]\]/);
+  assert.match(String(plan.run), /--candidate-cli-version "\$CANDIDATE_CLI_VERSION"/);
   assert.match(String(plan.run), /--candidate-channel "\$RELEASE_ENVIRONMENT"/);
   assert.equal(plan.env.CANDIDATE_CLI_VERSION, '${{ inputs.candidate_cli_version }}');
   assert.equal(plan.env.RELEASE_ENVIRONMENT, '${{ inputs.environment }}');
@@ -124,10 +130,12 @@ test('build-tauri gates the production desktop publish on desktop-setup against 
   assert.ok(job['timeout-minutes'] > 20, 'the job leaves room for setup around the derived suite timeout');
   const run = String(runStep.run);
   assert.match(run, /--platform linux/);
-  assert.match(run, /--source published-tag/);
-  assert.match(run, /--ref "cli-v\$\{CANDIDATE_CLI_VERSION\}"/);
+  // The registry picks the CLI: the candidate's immutable tag, else the published channel CLI.
+  assert.match(run, /--source "\$\{CLI_SOURCE\}"/);
+  assert.match(run, /--ref "\$\{CLI_REF\}"/);
   assert.match(run, /--desktop-artifact "\$\{desktop_artifact\}"/);
-  assert.equal(runStep.env.CANDIDATE_CLI_VERSION, '${{ inputs.candidate_cli_version }}');
+  assert.equal(runStep.env.CLI_SOURCE, '${{ steps.plan.outputs.cli_source }}');
+  assert.equal(runStep.env.CLI_REF, '${{ steps.plan.outputs.cli_ref }}');
 
   // The production publish waits for the gate; a failed gate never publishes.
   const publish = workflow.jobs.publish_stable_release;

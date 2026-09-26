@@ -16,6 +16,7 @@ import { CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS } from '@/daem
 import { createCodexPermissionHandler } from './utils/createCodexPermissionHandler';
 import { applyPermissionModeToCodexPermissionHandler } from './utils/applyPermissionModeToHandler';
 import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
+import { createCodexAppServerRpcError } from './appServer/appServerCompatibility';
 
 const modelSyncFlushPendingAfterStartSpy = vi.fn(async () => {});
 const sessionModeSyncFlushPendingAfterStartSpy = vi.fn(async () => {});
@@ -1158,6 +1159,43 @@ describe('runCodex CodexACP resume behavior', () => {
         }),
       }),
     ]);
+  });
+
+  it('explains an active Codex writer instead of suggesting that app-server cannot run', async () => {
+    resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
+      happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
+      mcpServers: {},
+    }));
+    createCodexAppServerRuntimeSpy.mockImplementationOnce(() => ({
+      ...createDefaultCodexAppServerRuntimeMock(),
+      startOrLoad: vi.fn(async () => {
+        throw createCodexAppServerRpcError({
+          method: 'thread/resume',
+          code: -32600,
+          message: 'thread resume-123 already has an active writer',
+        });
+      }),
+    }));
+
+    const { runCodex } = await import('./runCodex');
+    const outcome = await runCodex({
+      credentials: { token: 'test' } as Credentials,
+      startedBy: 'daemon',
+      startingMode: 'remote',
+      resume: 'resume-123',
+      permissionMode: 'default',
+      permissionModeUpdatedAt: 1,
+      codexBackendMode: 'appServer',
+    } as any).then(() => null, (error: unknown) => error);
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toMatch(/another Codex process.*already writing/i);
+    expect((outcome as Error).message).toMatch(/start a new session in Happier.*happier attach/i);
+    expect((outcome as Error).message).not.toMatch(/ensure Codex app-server can run/i);
+    expect(lastSessionClient?.sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'message',
+      message: expect.stringMatching(/another Codex process.*already writing/i),
+    }));
   });
 
   it('does not report an ordinary metadata-driven app-server resume ready when provider resume fails', async () => {

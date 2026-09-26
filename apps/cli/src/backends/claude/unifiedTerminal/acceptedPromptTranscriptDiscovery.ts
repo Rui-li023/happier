@@ -137,6 +137,7 @@ export type ClaudeUnifiedAcceptedPromptTranscriptDiscovery = Readonly<{
     maxUserMessageSeq?: number | null | undefined;
     userMessageLocalIds?: readonly string[] | null | undefined;
   }>): boolean;
+  forgetRetiredPromptByBatch(input: Parameters<ClaudeUnifiedAcceptedPromptTranscriptDiscovery['consumeAcceptedPromptByBatch']>[0]): boolean;
   findMatchingTranscript(messages: readonly unknown[]): ClaudeUnifiedAcceptedPromptTranscriptMatch | null;
   consumeAcceptedPromptMatch(match: ClaudeUnifiedAcceptedPromptTranscriptMatch): boolean;
   claimMatchingTranscript(messages: readonly unknown[]): ClaudeUnifiedAcceptedPromptTranscriptMatch | null;
@@ -355,11 +356,10 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
   const controlCommandBindings = new Map<string, ControlCommandBinding>();
   const nowMs = opts.nowMs ?? Date.now;
   const acceptedPromptWindowMs = Math.max(100, Math.trunc(opts.acceptedPromptWindowMs));
-  // A row may match an attempt accepted one window later, and that attempt remains live for one
-  // further window. One canonical two-window horizon keeps all closed transcript evidence from
-  // reopening while it can still be eligible for any durable attempt.
-  const closedTranscriptEvidenceRetentionMs = acceptedPromptWindowMs * 2;
-  const closedTranscriptEvidence = new Map<string, number>();
+  const controlCommandBindingRetentionMs = acceptedPromptWindowMs * 2;
+  // Durable Pending attempts do not expire. Keep closed evidence for this discovery's lifetime
+  // so an old row cannot settle another attempt after a clock window or manual retirement.
+  const closedTranscriptEvidence = new Set<string>();
   const acceptedPromptHookEchoes = new Map<string, AcceptedPromptHookEcho>();
   const reservedTranscriptEchoKeys = new Set<string>();
   const nativeQueuedCommandCustody: NativeQueuedCommandCustody[] = [];
@@ -389,9 +389,6 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
     }
     for (const [key, binding] of controlCommandBindings) {
       if (binding.expiresAtMs < referenceMs) controlCommandBindings.delete(key);
-    }
-    for (const [key, expiresAtMs] of closedTranscriptEvidence) {
-      if (expiresAtMs < referenceMs) closedTranscriptEvidence.delete(key);
     }
     const liveAcceptedPromptIds = new Set(acceptedPrompts.map((prompt) => prompt.id));
     for (let index = nativeQueuedCommandCustody.length - 1; index >= 0; index -= 1) {
@@ -432,7 +429,9 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
     if (reservedTranscriptEchoKeys.delete(identity.transcriptKey)) return true;
     const sessionId = readNonEmptyString(record.sessionId);
     if (!sessionId || sessionId.trim().length === 0 || !identity.promptId) return false;
-    return acceptedPromptHookEchoes.delete(buildHookEchoKey(sessionId, identity.promptId));
+    const consumed = acceptedPromptHookEchoes.delete(buildHookEchoKey(sessionId, identity.promptId));
+    if (consumed) closeTranscriptEvidence(identity.transcriptKey);
+    return consumed;
   }
 
   function maybeEmitAttemptLocalCommandCompletion(binding: ControlCommandBinding): void {
@@ -592,7 +591,7 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
       commandText,
       transcriptTimestampMs,
       observedAtMs,
-      expiresAtMs: observedAtMs + closedTranscriptEvidenceRetentionMs,
+      expiresAtMs: observedAtMs + controlCommandBindingRetentionMs,
       completionOwner: resolveClaudeControlCommandCompletionOwner(shape.name),
       origin: { kind: 'unknown' },
       attemptDeliveryIdentity: null,
@@ -655,8 +654,9 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
       acceptedPrompt.normalizedText === normalizedContent
       && !assignedAcceptedPromptIds.has(acceptedPrompt.id)
     ));
-    if (matchingPrompts.length === 0) return null;
-    return [...matchingPrompts].sort((left, right) => left.registrationOrder - right.registrationOrder)[0] ?? null;
+    // Native queue evidence carries prompt text, not a Pending identity. Bind only a unique
+    // unassigned attempt; an ambiguous predecessor must not steal a replacement's evidence.
+    return matchingPrompts.length === 1 ? matchingPrompts[0] ?? null : null;
   }
 
   function observeNativeQueuedCommandOperation(operation: NativeQueuedCommandOperation): void {
@@ -685,6 +685,10 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
     candidate.removedAtMs = operation.timestampMs;
   }
 
+  function closeTranscriptEvidence(transcriptKey: string | null): void {
+    if (transcriptKey) closedTranscriptEvidence.add(transcriptKey);
+  }
+
   function findNativeQueuedCommandConsumptionMatch(
     message: unknown,
   ): ClaudeUnifiedAcceptedPromptTranscriptMatch | null {
@@ -697,7 +701,13 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
         && candidate.content === consumption.prompt
       ))
       .sort((left, right) => left.episodeOrder - right.episodeOrder)[0];
-    if (!custody) return null;
+    if (!custody) {
+      const candidates = acceptedPrompts.filter((candidate) => (
+        candidate.normalizedText === normalizeClaudeUnifiedPromptIdentityText(consumption.prompt)
+      ));
+      if (candidates.length > 1) closeTranscriptEvidence(consumption.transcriptKey);
+      return null;
+    }
     const acceptedPrompt = acceptedPrompts.find((candidate) => candidate.id === custody.acceptedPromptId);
     if (
       !acceptedPrompt
@@ -725,6 +735,13 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
     for (const message of messages) {
       const record = readObject(message);
       const parsedMessage = parseRawJsonLinesObject(message);
+      const providerPromptId = readNonEmptyString(record?.promptId);
+      const providerSessionId = readNonEmptyString(record?.sessionId);
+      if (parsedMessage && providerPromptId && providerSessionId
+        && acceptedPromptHookEchoes.has(buildHookEchoKey(providerSessionId, providerPromptId))) {
+        closeTranscriptEvidence(readTranscriptIdentity(parsedMessage).transcriptKey);
+        continue;
+      }
       const controlShape = parsedMessage ? readClaudeControlCommandRowShape(parsedMessage) : null;
       if (parsedMessage && controlShape?.kind === 'stdout') {
         observeControlCommandTranscript(parsedMessage);
@@ -767,7 +784,14 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
           ));
         if (matchingIndices.length === 0) continue;
         const normalizedText = normalizeClaudeUnifiedPromptIdentityText(text);
-        const exactMatch = matchingIndices.find(({ acceptedPrompt }) => acceptedPrompt.normalizedText === normalizedText);
+        const exactMatches = matchingIndices.filter(({ acceptedPrompt }) => acceptedPrompt.normalizedText === normalizedText);
+        // A provider UUID deduplicates the row; it does not identify which Pending attempt
+        // produced identical text. Preserve ambiguity until independently bound evidence settles it.
+        if (exactMatches.length > 1) {
+          closeTranscriptEvidence(transcriptKey);
+          continue;
+        }
+        const exactMatch = exactMatches[0];
         if (exactMatch) {
           matchIndex = exactMatch.index;
           matchKind = 'exact';
@@ -807,12 +831,7 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
     const acceptedPrompt = acceptedPrompts[matchIndex];
     if (!acceptedPrompt) return false;
     confirmAcceptedPromptControlBindings(acceptedPrompt.id);
-    if (match.transcriptKey) {
-      closedTranscriptEvidence.set(
-        match.transcriptKey,
-        nowMs() + closedTranscriptEvidenceRetentionMs,
-      );
-    }
+    closeTranscriptEvidence(match.transcriptKey);
     for (let index = nativeQueuedCommandCustody.length - 1; index >= 0; index -= 1) {
       if (nativeQueuedCommandCustody[index]?.acceptedPromptId === acceptedPrompt.id) {
         nativeQueuedCommandCustody.splice(index, 1);
@@ -834,6 +853,30 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
     const match = findMatchingTranscript(messages);
     if (!match) return null;
     return consumeAcceptedPromptMatch(match) ? match : null;
+  }
+
+  function removePromptByBatch(
+    input: Parameters<ClaudeUnifiedAcceptedPromptTranscriptDiscovery['consumeAcceptedPromptByBatch']>[0],
+    accepted: boolean,
+  ): boolean {
+    const normalizedText = normalizeClaudeUnifiedPromptIdentityText(input.message);
+    if (normalizedText.length === 0) return false;
+    pruneExpired(nowMs());
+    const matchIndex = acceptedPrompts.findIndex((acceptedPrompt) => (
+      acceptedPrompt.normalizedText === normalizedText
+      && doesBatchMatchDeliveryIdentity(acceptedPrompt, input)
+    ));
+    if (matchIndex < 0) return false;
+    const acceptedPrompt = acceptedPrompts[matchIndex];
+    if (!acceptedPrompt) return false;
+    if (accepted) confirmAcceptedPromptControlBindings(acceptedPrompt.id);
+    for (let index = nativeQueuedCommandCustody.length - 1; index >= 0; index -= 1) {
+      if (nativeQueuedCommandCustody[index]?.acceptedPromptId === acceptedPrompt.id) {
+        nativeQueuedCommandCustody.splice(index, 1);
+      }
+    }
+    acceptedPrompts.splice(matchIndex, 1);
+    return true;
   }
 
   return {
@@ -939,26 +982,8 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
 
     observeControlCommandTranscript,
 
-    consumeAcceptedPromptByBatch(input) {
-      const normalizedText = normalizeClaudeUnifiedPromptIdentityText(input.message);
-      if (normalizedText.length === 0) return false;
-      pruneExpired(nowMs());
-      const matchIndex = acceptedPrompts.findIndex((acceptedPrompt) => (
-        acceptedPrompt.normalizedText === normalizedText
-        && doesBatchMatchDeliveryIdentity(acceptedPrompt, input)
-      ));
-      if (matchIndex < 0) return false;
-      const acceptedPrompt = acceptedPrompts[matchIndex];
-      if (!acceptedPrompt) return false;
-      confirmAcceptedPromptControlBindings(acceptedPrompt.id);
-      for (let index = nativeQueuedCommandCustody.length - 1; index >= 0; index -= 1) {
-        if (nativeQueuedCommandCustody[index]?.acceptedPromptId === acceptedPrompt.id) {
-          nativeQueuedCommandCustody.splice(index, 1);
-        }
-      }
-      acceptedPrompts.splice(matchIndex, 1);
-      return true;
-    },
+    consumeAcceptedPromptByBatch: (input) => removePromptByBatch(input, true),
+    forgetRetiredPromptByBatch: (input) => removePromptByBatch(input, false),
 
     findMatchingTranscript,
 

@@ -24,6 +24,7 @@ import {
   downloadPinnedDesktopDeb,
   extractBundledHsetup,
   resolveChannelForCliVersion,
+  resolvePublishedCliTag,
   resolvePublishedStableBaseline,
   stageCliReleaseAssets,
 } from './desktop-setup-artifacts.mjs';
@@ -170,6 +171,7 @@ async function main() {
       'desktop-artifact': { type: 'string', default: '' },
       'cli-assets-dir': { type: 'string', default: '' },
       'cli-tag': { type: 'string', default: '' },
+      'cli-channel': { type: 'string', default: '' },
       channel: { type: 'string', default: '' },
       'relay-image': { type: 'string', default: '' },
       scenarios: { type: 'string', default: 'fresh-setup,upgrade' },
@@ -194,8 +196,8 @@ async function main() {
   }
   const desktopArtifact = String(values['desktop-artifact']).trim();
   if (!desktopArtifact) throw new Error('--desktop-artifact <path to the Linux .deb or .AppImage under test> is required');
-  if (!values['cli-assets-dir'] === !values['cli-tag']) {
-    throw new Error('pass exactly one of --cli-assets-dir <dir> or --cli-tag cli-v<version> for the CLI under test');
+  if ([values['cli-assets-dir'], values['cli-tag'], values['cli-channel']].filter((value) => String(value).trim()).length !== 1) {
+    throw new Error('pass exactly one of --cli-assets-dir <dir>, --cli-tag cli-v<version> or --cli-channel <channel> for the CLI under test');
   }
 
   const workDir = resolve(String(values['work-dir']).trim() || join(here, '..', '..', '..', 'output', `desktop-setup-${process.pid}`));
@@ -211,12 +213,15 @@ async function main() {
   const identity = /** @type {Record<string, unknown>} */ ({});
   identity.desktop = extractBundledHsetup({ artifactPath: desktopArtifact, outFile: join(desktopDir, 'new', 'hsetup') });
   let cliSourceDir = String(values['cli-assets-dir']).trim();
+  const cliChannel = String(values['cli-channel']).trim();
+  // Resolved once: every later download and the summary use the same immutable tag.
+  const cliTag = cliChannel ? await resolvePublishedCliTag({ repo, channel: cliChannel, token }) : String(values['cli-tag']).trim();
   if (!cliSourceDir) {
     cliSourceDir = join(workDir, 'downloads', 'cli-new');
-    await downloadPinnedCliAssets({ repo, tag: String(values['cli-tag']), destDir: cliSourceDir, token });
+    await downloadPinnedCliAssets({ repo, tag: cliTag, destDir: cliSourceDir, token });
   }
   const newCli = stageCliReleaseAssets({ sourceDir: resolve(cliSourceDir), stageDir: join(feedDir, 'stages', 'new') });
-  identity.cli = { version: newCli.version, source: values['cli-tag'] || resolve(cliSourceDir) };
+  identity.cli = { version: newCli.version, source: cliTag || resolve(cliSourceDir), ...(cliChannel ? { resolvedFrom: `cli-${cliChannel}` } : {}) };
   const channel = String(values.channel).trim() || resolveChannelForCliVersion(newCli.version);
   const relayImage = String(values['relay-image']).trim() || `happierdev/relay-server:${channel === 'stable' ? 'stable' : 'preview'}`;
   identity.channel = channel;

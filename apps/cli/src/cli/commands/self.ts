@@ -7,7 +7,7 @@ import { configuration } from '@/configuration';
 import type { CommandContext } from '@/cli/commandRegistry';
 import {
   FIRST_PARTY_COMPONENT_IDS,
-  describeHappierCliOrigin,
+  FirstPartyPayloadMutationLockError,
   installVersionedPayload,
   prepareFirstPartyComponentPayloadFromGitHubRelease,
   resolveFirstPartyComponentRelease,
@@ -33,6 +33,8 @@ import {
 import { handleSelfMigrateCommand } from './self/handleSelfMigrateCommand';
 import { maybeRunVersionGatedRuntimeMigration } from './self/maybeRunVersionGatedRuntimeMigration';
 import { maybeRunDoctorRepair } from './self/maybeRunDoctorRepair';
+import { resolveRunningCliPackageManagerOrigin } from '@/cli/runtime/update/cliUpdateFacts';
+import { reportUpdaterAdmission } from '@/cli/runtime/update/updaterAdmission';
 import {
   quiesceInstalledCliWindowsPayloadOwners,
   resolvePayloadOwnerStopTimeoutMs,
@@ -280,12 +282,18 @@ async function cmdUpdate(argv: string[], rawArgv: readonly string[] = process.ar
     const upgrade = npmUpgradeCommand({ packageName: pkgName, channel, to: toArg });
     console.log(chalk.yellow('Detected npm-based install; in-place runtime update is disabled.'));
     console.log(chalk.gray('Run instead:'), chalk.cyan(upgrade));
+    reportUpdaterAdmission({ admitted: false, code: 'cli_not_managed', message: `This Happier CLI was installed with npm. Update it with: ${upgrade}` });
     return;
   }
-  const origin = describeHappierCliOrigin(process.argv[1] ?? '');
-  if (origin.kind === 'brew') {
+  const origin = resolveRunningCliPackageManagerOrigin({
+    invokedPath: process.argv[1] ?? '',
+    execPath: process.execPath,
+    npmPackageName: resolveUpdatePackageName(),
+  });
+  if (origin?.kind === 'brew') {
     console.log(chalk.yellow('Detected a Homebrew install; Homebrew updates it.'));
     console.log(chalk.gray('Run instead:'), chalk.cyan(origin.updateCommand));
+    reportUpdaterAdmission({ admitted: false, code: 'cli_not_managed', message: `This Happier CLI was installed with Homebrew. Update it with: ${origin.updateCommand}` });
     return;
   }
 
@@ -309,6 +317,8 @@ async function cmdUpdate(argv: string[], rawArgv: readonly string[] = process.ar
   const result = await runSelfUpdateStep(steps, 'Downloading, verifying and installing', async () => await runManagedCliUpdate({
     channel: effective.channel,
     processEnv,
+    // A daemon that started this run (remote `cli.update.v1`) answers its task only after this.
+    onAdmitted: () => reportUpdaterAdmission({ admitted: true }),
     targetVersion: effective.targetVersion,
     preparePayload: async (params) => await prepareFirstPartyComponentPayloadFromGitHubRelease({
       ...params,
@@ -499,6 +509,12 @@ export async function handleSelfCliCommand(context: CommandContext): Promise<voi
     console.log(usage());
     process.exit(1);
   } catch (error) {
+    // A detached updater that ends before admission tells the daemon waiting for it (no-op otherwise).
+    reportUpdaterAdmission({
+      admitted: false,
+      code: error instanceof FirstPartyPayloadMutationLockError ? 'cli_update_in_progress' : 'cli_update_failed',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
     console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error');
     if (process.env.DEBUG) {
       console.error(error);

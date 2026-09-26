@@ -218,35 +218,69 @@ only way a managed first-party CLI is updated in place. `happier self update`, t
 bootstrap `cli.update.v1` and the daemon-hosted remote `cli.update.v1` all run it, always from the
 version being replaced:
 
-1. **One target version.** The ring's newest release (or `--to <exact version>`, tag
+1. **Admission.** The transaction first takes both locks described in step 4 — before it downloads
+   anything — so a concurrent update is refused at once and never downloads, and a caller learns
+   the attempt was admitted (`onAdmitted`) before it waits for the download. One update per Happier
+   home runs at a time; its download is the only one.
+2. **One target version.** The ring's newest release (or `--to <exact version>`, tag
    `cli-v<version>`) is resolved once by the acquisition owner
    (`prepareFirstPartyComponentPayloadFromGitHubRelease`, every OS including Windows) and downloaded
    with its minisign-verified checksums; every later step is bound to that version.
-2. **Smoke.** The staged executable's `--version` must equal the target, or nothing is activated
+3. **Smoke.** The staged executable's `--version` must equal the target, or nothing is activated
    (`cli_update_smoke_failed`).
-3. **Capture, then activate without pruning,** under the install mutation lock
-   (`withFirstPartyPayloadMutationLock`: `<installRoot>.mutation.lock` names its holder's pid; a
-   second installer/update fails at once with `FIRST_PARTY_PAYLOAD_MUTATION_IN_PROGRESS`, a lock
-   whose holder died is taken over; `installVersionedPayload` takes the same lock). The capture
+4. **Capture, then activate without pruning,** under two locks
+   (`withFirstPartyPayloadMutationLock.ts`): the install root's (`<installRoot>.mutation.lock`) and
+   the home-wide activation lock (`<home>/first-party-activation.lock`), because launchers
+   (`<home>/bin`) and the default-channel record are shared by every channel.
+   `installVersionedPayload` takes both for any component with launchers or the default-channel
+   record. A busy lock fails at once (`FIRST_PARTY_PAYLOAD_MUTATION_IN_PROGRESS`); a lock whose
+   holder process died is reclaimed under `<lock>.reclaim`, so two reclaimers can never both remove
+   it, and a holder only ever removes its own lock (token). A lock release that fails after the
+   outcome is settled never changes it: it is reported as a diagnostic (`onWarning`, stderr by
+   default), and the lock left behind names a pid that the next holder reclaims once it has exited.
+   The capture
    (`restoreInstalledPayloadState.ts`) records the `current`/`previous` markers (which name the
-   pointer targets), the default-channel record, and moves aside every shim the activation will
-   rewrite — renaming works on a running Windows `.exe` where deleting it does not.
-4. **Restart and prove,** only when the service's own daemon was running before the update: through
+   pointer targets) and the default-channel record, and moves every launcher the activation will
+   rewrite into this transaction's own `<home>/bin/.update-rollback/<id>/` (renaming works on a
+   running Windows `.exe` where deleting it does not). If moving one fails, the ones already moved
+   are put back first. Nothing removes another transaction's set-aside entries.
+5. **Restart and prove,** only when the service's own daemon was running before the update: through
    the CLI service owner (`daemon service restart` run by the activated binary — its ownership wait
    is the budget), then the owner must report the target version. `last-update.json` says
    `pendingReconnect` meanwhile.
-5. **Commit** (drop the moved-aside shims, prune to current + previous) **or restore** everything
-   captured and restart the previous binary. Rollback happens only when activation or that local
-   proof failed — never because the relay is unreachable: a machine that is offline after a good
-   local restart has updated. A restore that itself fails is reported `failed`, never `rolledBack`.
-6. **Record** the outcome in `<installRoot>/last-update.json` (`CliUpdateLastResultSchema`).
+6. **Commit** (drop this transaction's set-aside launchers, prune to current + previous) **or
+   recover:** restore everything captured, restart the previous binary and prove it, and only then
+   report. Rollback happens only when activation or that local proof failed — never because the
+   relay is unreachable: a machine that is offline after a good local restart has updated.
+   `rolledBack` means the previous daemon is back and proven (or none was running); a restore that
+   failed, or a restored version whose service did not come back, is `failed` and says which.
+7. **Record every end** in `<installRoot>/last-update.json` (`CliUpdateLastResultSchema`) through
+   its one writer — failures before activation included (release, download, verification, unpack,
+   smoke; `targetVersion` is `null` only when no release could be resolved). A refusal because
+   another update holds the lock records nothing: the record belongs to the attempt in progress. A
+   record that cannot be written never blocks recovery; it is reported on stderr (the updater's log
+   for a remote update).
+
+**What recovery covers — and what it does not.** Recovery covers activation and restart failures
+this process catches. It does **not** cover the updater itself being killed or the machine losing
+power mid-transaction (a set-aside directory may then be the only copy of a launcher, which is why
+nothing deletes other transactions' entries), it proves the previous binary's compatibility with
+state a failing new daemon wrote only for the supported predecessor transition below, and it does
+not supervise the service manager beyond the one restart it performs (systemd/launchd/Task
+Scheduler restart policy is theirs).
 
 The service decision is one predicate per caller boundary: the CLI plans it from the daemon owner
 observed before the update (`planServiceDaemonRestartAfterUpdate`: this channel's own service
 label, never a manual daemon or another channel's service); bootstrap reads `daemon status --json`
 through `createSelectedCliInvocation` (inherited relay selectors cleared, so the daemon it verifies
-is the one the service runs). Windows `self update` still stops the payload's processes before
-activation (`quiesceInstalledCliWindowsPayloadOwners`, as the installer does).
+is the one the service runs).
+
+**Windows.** The two local paths differ. `happier self update` stops the payload's processes before
+activation (`quiesceInstalledCliWindowsPayloadOwners`: `service stop`, `daemon stop --all
+--kill-sessions`, `taskkill /T` — **running sessions are ended**), as the installer does. The
+desktop's `cli.update.v1` does not pass that step: it relies on the launcher move-aside and does
+not end sessions, but it is unverified on a real Windows host. Remote update is disabled on Windows
+(below).
 
 **Rolling back across a migration.** The previous version must read whatever the new one wrote
 before it failed. Every predecessor that can run this transaction is ≥ 0.2.13 (the transaction
@@ -261,18 +295,24 @@ schema `CliUpdateFactsSchema` in `@happier-dev/protocol`) reports `currentVersio
 cached `latestVersion`, `channel`, `installSource` (`managed` only when the running executable is
 inside its ring's recorded install; npm/brew name their own update command), `updateCommand`,
 `canUpdateRemotely` and `lastUpdate`. Every daemon publishes it in its encrypted machine metadata
-as `cliUpdate` on its first connect after start, and `daemon status --json` extends `cliUpdate`
-with it. The update-check cache has one writer (`self check`, `recordCliUpdateCheck`) and one
+as `cliUpdate` on its first connect after start and again whenever `last-update.json` changes
+(the daemon watches its install root — no poller; `watchLastCliUpdateResult`), and
+`daemon status --json` extends `cliUpdate` with it. The update-check cache has one writer (`self check`, `recordCliUpdateCheck`) and one
 ring-filtered reader (`readCachedCliUpdateState`, `packages/cli-common/src/update`) used by the
 notice, the status, doctor repair and K5; doctor never writes it or calls npm itself.
 
 **Remote.** The daemon's `tool.systemTasks` capability lists `cli.update.v1` only when
 `canUpdateRemotely` (presence = capability; older daemons never list it). The kind starts
 `self update` detached from the daemon's own binary (output to `logs/cli-update-<ms>.log`) and
-answers `{ started: true, currentVersion, channel, logPath }` at once; the updater outlives the
+answers `{ started: true, currentVersion, channel, logPath }` only once the updater reported on
+its admission pipe (`updaterAdmission.ts`: fd 3, one JSON line, then closed — stdout/stderr stay on
+the log) that it holds the locks; an updater refused admission (`cli_update_in_progress`, whose
+outcome another attempt owns) or ending before it reports (`cli_update_start_failed`, naming the log)
+fails the task instead, so a refused attempt is never shown as started. The updater outlives the
 service restart because systemd uses `KillMode=process` and launchd `AbandonProcessGroup`. The
 outcome is observed when the machine reconnects: its metadata carries the new (or restored)
-version and `lastUpdate`. npm/Homebrew installs are refused with their exact update command
+version and `lastUpdate`; an attempt that ended without a restart (e.g. the download failed) is
+republished by the still-running daemon when the updater records it. npm/Homebrew installs are refused with their exact update command
 (`cli_not_managed`). Windows reports `canUpdateRemotely: false`: its update stops the payload's
 processes with `taskkill /T`, which would end the updater (a descendant of the daemon), and Task
 Scheduler's treatment of a detached descendant across `/End` is unverified.
@@ -438,8 +478,10 @@ no `prevent_exit`, so it would skip the handoff entirely. The app menu mirrors t
 for item (About, Services, Hide, Edit, View, Window, Help, keeping tauri's own Window/Help submenu ids
 so macOS still gets the window list and Help search) and replaces only Quit. Windows and Linux get no
 app menu from tauri at all, which is why the tray is not optional there: it is both their only Quit
-and their only way to reopen a window that close merely hid. The tray itself is only the monochrome
-Happier mark (a template image on macOS), with no title and no status colour; clicking it on any
+and their only way to reopen a window that close merely hid. The tray itself is only the Happier
+mark, with no title and no status colour: a template image on macOS, and on Windows and Linux the
+full-colour mark on a light tray or a white silhouette on a dark one (Windows reads the taskbar's
+system mode, Linux the settings portal's `color-scheme`, unknown meaning dark); clicking it on any
 platform opens its menu: a disabled status line (`label · detail` from `buildDesktopTrayState`),
 **Open Happier**, and **Quit Happier** (`src-tauri/src/tray.rs`).
 

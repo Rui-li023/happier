@@ -39,6 +39,7 @@ import { CommandPaletteProvider } from '@/components/appShell/commandPalette/Com
 import { StatusBarProvider } from '@/components/ui/layout/StatusBarProvider';
 import { UpdatesEntry } from '@/components/updates/UpdatesPopoverButton';
 import { UpdatesSummaryProvider } from '@/updates/useUpdatesSummary';
+import { UpdateFactsBackgroundRuntime } from '@/updates/UpdateFactsBackgroundRuntime';
 import { monkeyPatchConsoleForRemoteLoggingForFasterAiAutoDebuggingOnlyInLocalBuilds } from '@/utils/system/remoteLogger';
 import { installBugReportConsoleCapture } from '@/utils/system/bugReportLogBuffer';
 import { configureBugReportUserActionTrail } from '@/utils/system/bugReportActionTrail';
@@ -816,6 +817,7 @@ function RootAppShell(props: Readonly<{
     const shellContent = (
         <View style={{ flex: 1, position: 'relative' }}>
             <ActionOperationRuntime enabled={auth.isAuthenticated && !props.isDesktopPetOverlayWindow} />
+            <UpdateFactsBackgroundRuntime enabled={auth.isAuthenticated && !props.isDesktopPetOverlayWindow} />
             {/*
               * R5/INV4 — deliberately NOT behind `auth.isAuthenticated`. This is the app's one
               * pre-auth mount: the moment the desktop window opens it starts acquiring the

@@ -15,6 +15,14 @@ async function handleBugReportCommand(args: string[]): Promise<void> {
   }
 
   const result = await runBugReportCommand(args);
+  if (result.mode === 'exported') {
+    console.log(chalk.green('✓ Diagnostics exported'));
+    console.log(chalk.gray(`  File: ${result.outputPath}`));
+    console.log(chalk.gray(`  Diagnostics included: ${result.diagnosticsIncluded ? 'yes' : 'no'}`));
+    console.log(chalk.gray(`  Artifacts: ${result.artifactCount}`));
+    return;
+  }
+
   if (result.mode === 'fallback') {
     const reasonLine = result.reason === 'submit-failed'
       ? 'Bug report submission failed. You can still file the issue manually using this fallback URL:'

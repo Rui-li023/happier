@@ -25,6 +25,8 @@ const CODEX_EXECUTION_RUN_PROCESS_ENV_KEYS = [
 ] as const;
 
 function buildCodexExecutionRunBaseEnv(isolationEnv: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv | undefined {
+  if (isolationEnv === undefined) return { ...process.env };
+
   const inherited: NodeJS.ProcessEnv = {};
   for (const key of CODEX_EXECUTION_RUN_PROCESS_ENV_KEYS) {
     const value = process.env[key];

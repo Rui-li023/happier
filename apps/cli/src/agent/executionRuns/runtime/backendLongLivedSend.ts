@@ -5,7 +5,7 @@ import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 import type { AcpSendFn } from '@/agent/acp/bridge/acpSessionForwarding';
 import type { StreamedTranscriptWriterSession } from '@/api/session/streamedTranscriptWriter';
 import type { ExecutionRunState } from '@/agent/executionRuns/runtime/executionRunTypes';
-import type { ExecutionRunBackendController, ExecutionRunController } from '@/agent/executionRuns/controllers/types';
+import { resetExecutionRunBackendOutput, type ExecutionRunBackendController, type ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import type { FinishExecutionRun } from '@/agent/executionRuns/runtime/executionRunFinishRun';
 import { resumeBackendControllerForResumableRun } from '@/agent/executionRuns/runtime/resumeBackendController';
 import { isAbortLikeError, normalizeExecutionRunSendDelivery, resolveInFlightDeliveryAction } from '@/agent/executionRuns/runtime/turnDelivery';
@@ -192,9 +192,7 @@ export async function sendPreparedBackendLongLivedRun(
   const thisEpoch = ctrl2.turnEpoch + 1;
   ctrl2.turnEpoch = thisEpoch;
   ctrl2.turnInFlight = true;
-  ctrl2.buffer = '';
-  ctrl2.sidechainStreamBuffer = '';
-  ctrl2.sidechainStreamKey = '';
+  resetExecutionRunBackendOutput(ctrl2);
 
   ctrl2.turnCount += 1;
   // Persist the cumulative turn count so resuming cannot reset enforcement (for example maxTurns).

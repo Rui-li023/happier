@@ -41,6 +41,9 @@ const deviceTypeState = vi.hoisted(() => ({
 const safeAreaState = vi.hoisted(() => ({
     bottom: 0,
 }));
+const platformState = vi.hoisted(() => ({
+    os: 'web' as 'web' | 'android',
+}));
 
 vi.mock('react-native-gesture-handler', () => {
     function createGesture(kind: string) {
@@ -135,10 +138,12 @@ installSessionShellCommonModuleMocks({
             Pressable: 'Pressable',
             ActivityIndicator: 'ActivityIndicator',
             Platform: {
-                OS: 'web',
+                get OS() {
+                    return platformState.os;
+                },
                 select: (spec: Record<string, unknown>) =>
-                    spec && Object.prototype.hasOwnProperty.call(spec, 'web')
-                        ? (spec as any).web
+                    spec && Object.prototype.hasOwnProperty.call(spec, platformState.os)
+                        ? (spec as any)[platformState.os]
                         : (spec as any).default,
             },
             useWindowDimensions: () => ({ width: 1200, height: 800 }),
@@ -403,6 +408,7 @@ describe('SessionView (data ready gating)', () => {
         gestureHandlerState.gestures = [];
         deviceTypeState.value = 'tablet';
         safeAreaState.bottom = 0;
+        platformState.os = 'web';
         standardCleanup();
         chatListPropsSpy.mockReset();
     });
@@ -560,6 +566,29 @@ describe('SessionView (data ready gating)', () => {
 
         const agentContentView = screen.tree.findByType('AgentContentView' as never);
         expect(agentContentView.props.safeAreaBottom).toBe(0);
+    });
+
+    it('lets the keyboard scaffold own the Android safe-area inset in classic sessions', async () => {
+        platformState.os = 'android';
+        deviceTypeState.value = 'phone';
+        safeAreaState.bottom = 34;
+        const { SessionView } = await sessionViewModulePromise;
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView id="s1" />
+            </AppPaneProvider>,
+        );
+
+        const chatContentContainers = screen.tree.findAllByType('View' as never).filter((node) => {
+            const style = flattenStyle(node.props.style);
+            return style.flexBasis === 0 && style.flexGrow === 1;
+        });
+        expect(chatContentContainers).toHaveLength(1);
+        expect(Number(flattenStyle(chatContentContainers[0]?.props.style).paddingBottom ?? 0)).toBe(0);
+
+        const agentContentView = screen.tree.findByType('AgentContentView' as never);
+        expect(agentContentView.props.safeAreaBottom).toBe(34);
     });
 
     it('does not expose a gesture handle that can unintentionally open cockpit mode from the composer', async () => {

@@ -17,6 +17,37 @@ describe('executionRunBackendFactory (codex)', () => {
     probeCodexAppServerExecutionRunAvailabilityMock.mockImplementation(() => true);
   });
 
+  it('inherits the parent process environment when execution-run isolation is absent', async () => {
+    const appServerCalls: Array<Record<string, unknown>> = [];
+
+    vi.stubEnv('PATH', 'C:\\Users\\alice\\AppData\\Roaming\\npm;C:\\Windows\\System32');
+    vi.stubEnv('PATHEXT', '.COM;.EXE;.CMD');
+    vi.stubEnv('HAPPIER_CODEX_PARENT_SENTINEL', 'inherited');
+    vi.stubEnv('HAPPIER_CODEX_EXECUTION_RUN_TRANSPORT', 'appServer');
+
+    vi.doMock('./createCodexAppServerExecutionRunBackend', () => ({
+      createCodexAppServerExecutionRunBackend: (options: Record<string, unknown>) => {
+        appServerCalls.push(options);
+        return { dispose: async () => undefined };
+      },
+    }));
+
+    const { executionRunBackendFactory } = await import('./executionRunBackendFactory');
+
+    executionRunBackendFactory({
+      cwd: '/tmp/happier-worktree',
+      backendId: 'codex',
+      permissionMode: 'read_only',
+    } as any);
+
+    expect(appServerCalls).toHaveLength(1);
+    expect(appServerCalls[0]?.env).toMatchObject({
+      PATH: `${resolve('/tmp/happier-worktree', 'scripts', 'shims')}${delimiter}C:\\Users\\alice\\AppData\\Roaming\\npm;C:\\Windows\\System32`,
+      PATHEXT: '.COM;.EXE;.CMD',
+      HAPPIER_CODEX_PARENT_SENTINEL: 'inherited',
+    });
+  });
+
   it('scrubs Codex session attach env while preserving isolated execution-run env', async () => {
     const captured: Array<Record<string, unknown>> = [];
 

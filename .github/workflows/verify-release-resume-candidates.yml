@@ -61,6 +61,18 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
+      - name: Enable trusted control Yarn
+        working-directory: .release-control
+        run: bash scripts/ci/corepack-prepare-yarn-with-retry.sh
+      - name: Install trusted verification dependencies
+        working-directory: .release-control
+        env:
+          YARN_PRODUCTION: 'false'
+          npm_config_production: 'false'
+          HAPPIER_INSTALL_SCOPE: protocol,agents,release-runtime,cli-common
+          HAPPIER_UI_VENDOR_WEB_ASSETS: '0'
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+        run: bash scripts/ci/yarn-install-with-retry.sh --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
       - name: Install minisign from trusted control bytes
         uses: ./.release-control/.github/actions/bootstrap-minisign
       - name: Verify CLI candidate

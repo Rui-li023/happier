@@ -10175,29 +10175,44 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       },
     });
 
-    for (const advanceMs of [0, 10_000, 20_000, 40_000, 60_000]) {
+    for (const advanceMs of [
+      0,
+      10_000,
+      20_000,
+      40_000,
+      60_000,
+      60_000,
+      60_000,
+      60_000,
+      60_000,
+      60_000,
+      60_000,
+      60_000,
+      60_000,
+      60_000,
+    ]) {
       now += advanceMs;
       await coordinator.tickOnce();
     }
 
-    expect(refreshConnectedServiceCredentialForQuota).toHaveBeenCalledTimes(1);
+    expect(refreshConnectedServiceCredentialForQuota).toHaveBeenCalledTimes(10);
     expect(refreshConnectedServiceCredentialForQuota).toHaveBeenLastCalledWith({
       serviceId: 'claude-subscription',
       profileId: 'work',
       force: true,
       reason: 'auth_failure',
     });
-    expect(api.updateConnectedServiceCredentialHealth).toHaveBeenCalledTimes(5);
-    expect(api.updateConnectedServiceCredentialHealth).toHaveBeenNthCalledWith(5, {
+    expect(api.updateConnectedServiceCredentialHealth).toHaveBeenCalledTimes(14);
+    expect(api.updateConnectedServiceCredentialHealth).toHaveBeenNthCalledWith(14, {
       serviceId: 'claude-subscription',
       profileId: 'work',
       expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv',
       health: {
         v: 1,
-        status: 'refresh_failed_retryable',
-        reconnectRequired: false,
-        lastRefreshAttemptAt: 1_130_000,
-        lastRefreshFailureAt: 1_130_000,
+        status: 'needs_reauth',
+        reconnectRequired: true,
+        lastRefreshAttemptAt: 1_670_000,
+        lastRefreshFailureAt: 1_670_000,
         lastRefreshFailureKind: 'provider_401',
         providerHttpStatus: 401,
       },
