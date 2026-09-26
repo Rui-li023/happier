@@ -1523,6 +1523,13 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
       && ownership.kind !== 'none'
       && ownership.owner.serviceManaged === true
       && ownership.owner.state.serviceLabel === paths.label;
+    const shouldStopWindowsOwner = shouldStopCurrentWindowsServiceOwnerBeforeLifecycleAction({
+      platform: installRuntime.platform,
+      ownership,
+      expectedServiceLabel: paths.label,
+      action: 'install',
+    });
+    const restartRunningDaemon = shouldStopWindowsOwner || isOwnServiceDaemonOnAnotherCli(ownership, paths.label);
 
     const strategy: DaemonServiceInstallStrategy | undefined =
       flags.replaceExisting === 'ring' ? 'replace-ring'
@@ -1542,6 +1549,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
         targetMode: installRuntime.targetMode,
         autostart: effectiveAutostart,
         darwinInstallMode: shouldKickstartCurrentDarwinInstall ? 'kickstart' : undefined,
+        restartRunningDaemon,
         instanceId: installRuntime.instanceId,
         activeServerId: installRuntime.activeServerId,
         strategy,
@@ -1608,7 +1616,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
         shouldTakeOverManualOwner: takeoverDecision.kind === 'manual-owner-takeover',
         action: 'install',
         run: async () => {
-          const stoppedWindowsOwner = await stopCurrentWindowsServiceOwnerIfNeeded({
+          await stopCurrentWindowsServiceOwnerIfNeeded({
             platform: installRuntime.platform,
             ownership,
             expectedServiceLabel: paths.label,
@@ -1625,7 +1633,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
             targetMode: installRuntime.targetMode,
             autostart: effectiveAutostart,
             darwinInstallMode: shouldKickstartCurrentDarwinInstall ? 'kickstart' : undefined,
-            restartRunningDaemon: stoppedWindowsOwner || isOwnServiceDaemonOnAnotherCli(ownership, paths.label),
+            restartRunningDaemon,
             instanceId: installRuntime.instanceId,
             activeServerId: installRuntime.activeServerId,
             serverUrl: installRuntime.serverUrl,

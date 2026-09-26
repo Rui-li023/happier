@@ -248,7 +248,7 @@ export async function previewDaemonServiceInstall(options: Readonly<{
   const installedModeExpectedFile = installedTargetService && installedAutostart && installedAutostart !== autostart
     ? buildPlan(installedAutostart).files[0] ?? null
     : null;
-  const autostartTriggerChangeOnly = Boolean(
+  const autostartTriggerChangeOnly = options.restartRunningDaemon !== true && Boolean(
     installedTargetService
     && installedModeExpectedFile
     && installedModeExpectedFile.path === installedTargetService.path

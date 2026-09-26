@@ -162,6 +162,35 @@ describe('daemon service install — autostart selection', () => {
     });
   });
 
+  it('restarts a stale linux daemon even when the only definition change is the login trigger', async () => {
+    await withTempDir('happier-autostart-trigger-stale-daemon-', async (homeDir) => {
+      const unitPath = `${homeDir}/.config/systemd/user/happier-daemon.default.service`;
+      const installed = await previewDefaultInstall({ homeDir, autostart: 'at-login' });
+      mkdirSync(dirname(unitPath), { recursive: true });
+      writeFileSync(unitPath, installed.plan.files[0]?.content ?? '', 'utf-8');
+
+      const switched = await previewDaemonServiceInstall({
+        platform: 'linux',
+        mode: 'user',
+        channel: 'stable',
+        targetMode: 'default-following',
+        autostart: 'on-demand',
+        restartRunningDaemon: true,
+        instanceId: 'default',
+        activeServerId: 'cloud',
+        userHomeDir: homeDir,
+        happierHomeDir: `${homeDir}/.happier`,
+        serverUrl: 'https://api.happier.dev',
+        webappUrl: 'https://app.happier.dev',
+        publicServerUrl: 'https://api.happier.dev',
+        nodePath: '/usr/local/bin/happier',
+        entryPath: '',
+      });
+
+      expect(commandText(switched)).toContain('systemctl --user restart happier-daemon.default.service');
+    });
+  });
+
   it('still restarts when the definition changed for any other reason', async () => {
     await withTempDir('happier-autostart-trigger-and-drift-', async (homeDir) => {
       const unitPath = `${homeDir}/.config/systemd/user/happier-daemon.default.service`;
