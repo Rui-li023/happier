@@ -19,6 +19,7 @@ import { layout } from '@/components/ui/layout/layout';
 import { ApprovalSessionContextCard } from './ApprovalSessionContextCard';
 import { ActionApprovalFieldsCard } from './ActionApprovalFieldsCard';
 import { ApprovalPreviewCard } from './ApprovalPreviewCard';
+import { resolveActionSpecTitle } from '@/sync/domains/actions/actionSpecCopy';
 
 const styles = StyleSheet.create((theme) => ({
   container: {
@@ -161,7 +162,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{ artifactId: st
     if (!actionId) return null;
     try {
       const spec = getActionSpec(actionId as ActionId);
-      return spec.title || actionId;
+      return resolveActionSpecTitle(spec) || actionId;
     } catch {
       return actionId;
     }

@@ -7,6 +7,7 @@ import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput
 import { listAgentInputActionChipActionIds } from '@/components/sessions/agentInput/sessionActions/listAgentInputActionChipActionIds';
 import { buildExecutionRunActionDraftInputForUi } from '@/sync/domains/actions/buildExecutionRunActionDraftInputForUi';
 import { createAgentInputActionShortcutChip } from '@/components/sessions/agentInput/sessionActions/createAgentInputActionShortcutChip';
+import { resolveActionSpecTitle } from '@/sync/domains/actions/actionSpecCopy';
 
 
 export function buildSessionAgentInputActionChips(params: Readonly<{
@@ -36,7 +37,7 @@ export function buildSessionAgentInputActionChips(params: Readonly<{
 
         return createAgentInputActionShortcutChip({
             key: `session-action:${actionId}`,
-            label: spec.title,
+            label: resolveActionSpecTitle(spec),
             layout: 'row',
             onPress: () => {
                 storage.getState().createSessionActionDraft(params.sessionId, {

@@ -88,6 +88,8 @@ const ALLOW_SAME_KEY_PREFIXES: ReadonlyArray<string> = [
     'agentInput.geminiPermissionMode.',
     'agentInput.geminiModel.',
     'profiles.builtInNames.',
+    // Theme preset names are names, like editor theme names ("Tokyo Night", "Crisp Dark").
+    'settingsAppearance.themeProfiles.presets.',
 ];
 
 const ALLOW_SAME_STRING_KEYS = new Set<string>([

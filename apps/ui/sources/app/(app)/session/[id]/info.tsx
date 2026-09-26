@@ -105,6 +105,7 @@ import {
     resolveProviderSessionIdForDebug,
 } from '@/components/sessions/debug/sessionDebugInformation';
 import { resolveSessionOrganizationMutationScope } from '@/sync/domains/session/organization/mutationScope';
+import { resolveActionSpecDescription, resolveActionSpecTitle } from '@/sync/domains/actions/actionSpecCopy';
 
 type RawJsonSectionId = 'agentState' | 'metadata' | 'sessionStatus' | 'session';
 
@@ -1143,8 +1144,8 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                     ) : null}
                     {!session.accessLevel && handoffActionEnabled && handoffSupported && (
                         <Item
-                            title={handoffActionSpec.title}
-                            subtitle={handoffActionSpec.description}
+                            title={resolveActionSpecTitle(handoffActionSpec)}
+                            subtitle={resolveActionSpecDescription(handoffActionSpec)}
                             icon={<Icon name="arrows-left-right" size={24} color={theme.colors.accent.blue} />}
                             onPress={performHandoff}
                             loading={handingOffSession}

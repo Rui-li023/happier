@@ -809,7 +809,7 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'sessionInfo.handOffSession');
         expect(handoffItems).toHaveLength(0);
     });
 
@@ -856,7 +856,7 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'sessionInfo.handOffSession');
         expect(handoffItems).toHaveLength(0);
     });
 
@@ -903,7 +903,7 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'sessionInfo.handOffSession');
         expect(handoffItems).toHaveLength(1);
     });
 
@@ -956,7 +956,7 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        let handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        let handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'sessionInfo.handOffSession');
         expect(handoffItems).toHaveLength(0);
 
         const { recordCachedMachineRpcDirectRouteViable } = await import('@/sync/domains/transfers/runtime/transferRouteCache');
@@ -968,7 +968,7 @@ describe('/session/[id]/info', () => {
         });
         await flushHookEffects({ cycles: 10 });
 
-        handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'sessionInfo.handOffSession');
         expect(handoffItems).toHaveLength(1);
     });
 
@@ -1022,7 +1022,7 @@ describe('/session/[id]/info', () => {
         const screen = await renderInfoScreen();
         await flushHookEffects({ cycles: 10 });
 
-        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'sessionInfo.handOffSession');
         expect(handoffItems).toHaveLength(1);
     });
 

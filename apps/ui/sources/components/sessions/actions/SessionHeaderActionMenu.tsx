@@ -17,6 +17,7 @@ import type { StorageState } from '@/sync/store/types';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { isActionEnabledInState } from '@/sync/domains/settings/actionsSettings';
 import { buildExecutionRunActionDraftInputForUi } from '@/sync/domains/actions/buildExecutionRunActionDraftInputForUi';
+import { resolveActionSpecDescription, resolveActionSpecTitle } from '@/sync/domains/actions/actionSpecCopy';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { Modal } from '@/modal';
@@ -269,8 +270,8 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
       .filter((spec) => spec.id !== 'session.handoff' || handoffAvailability.available)
       .map((spec) => ({
         id: spec.id,
-        title: spec.title,
-        subtitle: spec.description,
+        title: resolveActionSpecTitle(spec),
+        subtitle: resolveActionSpecDescription(spec),
       }));
 
     const out: DropdownMenuItem[] = [];

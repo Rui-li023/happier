@@ -13,6 +13,7 @@ import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
 import { ApprovalDecisionFooter } from './ApprovalDecisionFooter';
 import { useApprovalDecisionHandler } from './useApprovalDecisionHandler';
 import { Icon } from '@/components/ui/icons/Icon';
+import { resolveActionSpecTitle } from '@/sync/domains/actions/actionSpecCopy';
 
 const PROMPT_CARD_HORIZONTAL_PADDING = 12;
 const PROMPT_CARD_ICON_SIZE = 18;
@@ -31,7 +32,7 @@ function getPreviewSummary(preview: unknown): string | null {
 function getActionTitle(actionId: string): string {
     try {
         const spec = getActionSpec(actionId as ActionId);
-        return spec.title || actionId;
+        return resolveActionSpecTitle(spec) || actionId;
     } catch {
         return actionId;
     }

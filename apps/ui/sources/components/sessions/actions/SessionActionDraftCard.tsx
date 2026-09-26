@@ -15,6 +15,7 @@ import { Text } from '@/components/ui/text/Text';
 import { ActionInputFields } from './ActionInputFields';
 import { resolveSessionActionDraftHeightBearingPaint } from './sessionActionDraftPresentation';
 import { useSessionActionFieldOptions } from './useSessionActionFieldOptions';
+import { resolveActionSpecTitle } from '@/sync/domains/actions/actionSpecCopy';
 
 
 export function SessionActionDraftCard(props: Readonly<{ sessionId: string; draft: SessionActionDraft }>) {
@@ -107,7 +108,7 @@ export function SessionActionDraftCard(props: Readonly<{ sessionId: string; draf
     }
   }, [cancel, executor, props.draft.actionId, props.draft.input, props.sessionId, setStatus, validationError]);
 
-  const title = spec.title;
+  const title = resolveActionSpecTitle(spec);
   const error = paint.errorLine;
   const startDisabled = props.draft.status === 'running' || isSubmitting || validationError !== null;
 

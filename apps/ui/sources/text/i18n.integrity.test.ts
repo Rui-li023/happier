@@ -31,27 +31,15 @@ const IGNORED_UNTRANSLATED_KEYS = new Set([
     'files.markdown',
     'settingsSession.sessionCreation.modalModeSimpleTitle',
     'settingsSession.sessionCreation.wizardPresentationAutoTitle',
-    'settingsSession.promptPersonalization.title',
-    'settingsSession.promptPersonalization.footer',
-    'settingsSession.promptPersonalization.askAgentToRenameSessionsTitle',
-    'settingsSession.promptPersonalization.askAgentToRenameSessionsNeverTitle',
-    'settingsSession.promptPersonalization.askAgentToRenameSessionsNeverSubtitle',
-    'settingsSession.promptPersonalization.askAgentToRenameSessionsInitialTitle',
-    'settingsSession.promptPersonalization.askAgentToRenameSessionsInitialSubtitle',
-    'settingsSession.promptPersonalization.askAgentToRenameSessionsOngoingTitle',
-    'settingsSession.promptPersonalization.askAgentToRenameSessionsOngoingSubtitle',
-    'settingsSession.promptPersonalization.askAgentToRenameSessionsInitialSelectedSubtitle',
-    'settingsSession.promptPersonalization.askAgentToRenameSessionsOngoingSelectedSubtitle',
-    'settingsSession.promptPersonalization.askAgentToRenameSessionsDisabledSubtitle',
-    'settingsSession.promptPersonalization.askAgentToSuggestReplyOptionsTitle',
-    'settingsSession.promptPersonalization.askAgentToSuggestReplyOptionsEnabledSubtitle',
-    'settingsSession.promptPersonalization.askAgentToSuggestReplyOptionsDisabledSubtitle',
     'newSession.worktree.backToRoot',
     'welcome.welcomeFooterRelay',
     'settingsSession.sessionList.narrowWorkingIndicatorSpinnerTitle',
     'settingsSession.sessionList.workingIndicatorSpinnerTitle',
     'settingsSession.sessionList.identityDisplayAvatarTitle',
     'settingsSession.transcript.messageActions.template.placeholder',
+    // A key combination the user types and a code sample, both literal.
+    'settingsKeyboard.setShortcutPromptPlaceholder',
+    'settingsAppearance.themeProfiles.previewCode',
     // Release channel names, the installer's own `--channel` vocabulary (R11/RV-9). Stable is
     // translated where the language has a word for it; Preview and Dev read as channel names.
     'machine.thisComputer.cliChannelPreview',
@@ -66,6 +54,8 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
     es: new Set([
         'automations.form.schedule.manualTitle',
         'settingsSession.sessionList.headerIdentityDisplayAvatarTitle',
+        // "diffs" is the loanword es.ts uses elsewhere.
+        'settingsAppearance.themeProfiles.groups.diff',
     ]),
     it: new Set([
         // "Offline" is the standard Italian status word for a disconnected machine.
@@ -73,6 +63,9 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         // "File" is the standard Italian computing noun, not an untranslated fallback.
         'notifications.activity.requestLabels.file',
         'settingsSession.sessionList.headerIdentityDisplayAvatarTitle',
+        // "Preset" is the loanword it.ts uses elsewhere ("Scegli un preset").
+        'settingsAppearance.themeProfiles.presetGroup',
+        'settingsAppearance.themeProfiles.presetSource',
     ]),
     pt: new Set([
         // "Offline" is the standard Portuguese status word for a disconnected machine.
@@ -80,6 +73,8 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'agentInput.suggestionGroups.plugins',
         'automations.form.schedule.manualTitle',
         'settingsSession.sessionList.headerIdentityDisplayAvatarTitle',
+        // "diffs" is the loanword pt.ts uses elsewhere.
+        'settingsAppearance.themeProfiles.groups.diff',
     ]),
     // French keeps these identical to English on purpose. Three groups, no accidents:
     //   product and provider nouns (Happier, Codex, Kimi, tmux, theme preset names, model ids),
@@ -480,6 +475,16 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'windowsRemoteSessionLaunchMode.shortWindowsTerminal',
         'windowsRemoteSessionLaunchMode.windowsTerminal',
         'zen.title',
+        // Theme editor: cognates (Diagnostics, Surfaces, Messages, Permissions) and glossary terms
+        // (chrome, composer, diff, overlay).
+        'settingsKeyboard.conflictsGroupTitle',
+        'settingsAppearance.themeProfiles.groups.surface',
+        'settingsAppearance.themeProfiles.groups.chrome',
+        'settingsAppearance.themeProfiles.groups.composer',
+        'settingsAppearance.themeProfiles.groups.message',
+        'settingsAppearance.themeProfiles.groups.diff',
+        'settingsAppearance.themeProfiles.groups.permission',
+        'settingsAppearance.themeProfiles.groups.overlay',
     ]),
     // These locales use the same spelling for this label.
     ca: new Set([
@@ -490,9 +495,20 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'message.runtimeConfigOutcomeKeyModel',
         'session.agentActivity.screenTitle',
         'settingsSession.sessionList.headerIdentityDisplayAvatarTitle',
+        // "Variant", "Text" and "Controls" are Catalan words too; "diffs" is the file's loanword.
+        'settingsAppearance.themeProfiles.editorMode',
+        'settingsAppearance.themeProfiles.groups.text',
+        'settingsAppearance.themeProfiles.groups.control',
+        'settingsAppearance.themeProfiles.groups.diff',
     ]),
     // "Offline" is the standard Polish status word for a disconnected machine.
-    pl: new Set(['message.runtimeConfigOutcomeKeyModel', 'updates.offline']),
+    pl: new Set([
+        'message.runtimeConfigOutcomeKeyModel',
+        'updates.offline',
+        // "Preset" is the loanword pl.ts uses elsewhere.
+        'settingsAppearance.themeProfiles.presetGroup',
+        'settingsAppearance.themeProfiles.presetSource',
+    ]),
     // German keeps these identical to English on purpose, in the same three groups French does:
     //   product, provider and preset nouns (Happier, Codex, tmux, model ids, theme names),
     //   the English technical vocabulary German developers actually speak and which the ratified
@@ -762,113 +778,89 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'voiceActivity.format.status',
         'voiceSurface.start',
         'workspaceCockpit.tabs',
+        // Theme editor: glossary terms (Theme, Preset, chrome, composer, diff, overlay) and cognates
+        // (Details, Text, Syntax).
+        'settingsAppearance.themeProfiles.title',
+        'settingsAppearance.themeProfiles.detailsGroup',
+        'settingsAppearance.themeProfiles.presetGroup',
+        'settingsAppearance.themeProfiles.presetSource',
+        'settingsAppearance.themeProfiles.groups.chrome',
+        'settingsAppearance.themeProfiles.groups.text',
+        'settingsAppearance.themeProfiles.groups.composer',
+        'settingsAppearance.themeProfiles.groups.syntax',
+        'settingsAppearance.themeProfiles.groups.diff',
+        'settingsAppearance.themeProfiles.groups.overlay',
     ]),
 };
 const IGNORED_UNTRANSLATED_KEY_PREFIXES = [
-    'settingsAppearance.themeProfiles.',
-    'settingsKeyboard.',
     'settingsSession.sessionCreation.',
-    'settingsSession.promptPersonalization.',
     'commandPalette.commands.',
     'releaseNotes.onboardingShowcase.',
     'sessionsList.',
 ];
 const UNTRANSLATED_PREFIX_BASELINE_COUNTS: Record<string, Record<string, number>> = {
     fr: {
-        'settingsAppearance.themeProfiles.': 27,
-        'settingsKeyboard.': 2,
         'settingsSession.sessionCreation.': 2,
-        'settingsSession.promptPersonalization.': 0,
         'commandPalette.commands.': 3,
         'releaseNotes.onboardingShowcase.': 0,
         'sessionsList.': 6,
     },
     ru: {
-        'settingsAppearance.themeProfiles.': 106,
-        'settingsKeyboard.': 21,
         'settingsSession.sessionCreation.': 1,
-        'settingsSession.promptPersonalization.': 15,
         'commandPalette.commands.': 35,
         'releaseNotes.onboardingShowcase.': 0,
         'sessionsList.': 22,
     },
     pl: {
-        'settingsAppearance.themeProfiles.': 106,
-        'settingsKeyboard.': 21,
         'settingsSession.sessionCreation.': 1,
-        'settingsSession.promptPersonalization.': 15,
         'commandPalette.commands.': 35,
         'releaseNotes.onboardingShowcase.': 0,
         'sessionsList.': 22,
     },
     es: {
-        'settingsAppearance.themeProfiles.': 106,
-        'settingsKeyboard.': 21,
         'settingsSession.sessionCreation.': 2,
-        'settingsSession.promptPersonalization.': 15,
         'commandPalette.commands.': 35,
         'releaseNotes.onboardingShowcase.': 14,
         'sessionsList.': 22,
     },
     it: {
-        'settingsAppearance.themeProfiles.': 106,
-        'settingsKeyboard.': 21,
         'settingsSession.sessionCreation.': 1,
-        'settingsSession.promptPersonalization.': 15,
         'commandPalette.commands.': 35,
         'releaseNotes.onboardingShowcase.': 14,
         'sessionsList.': 22,
     },
     pt: {
-        'settingsAppearance.themeProfiles.': 106,
-        'settingsKeyboard.': 21,
         'settingsSession.sessionCreation.': 1,
-        'settingsSession.promptPersonalization.': 15,
         'commandPalette.commands.': 35,
         'releaseNotes.onboardingShowcase.': 0,
         'sessionsList.': 22,
     },
     ca: {
-        'settingsAppearance.themeProfiles.': 106,
-        'settingsKeyboard.': 21,
         'settingsSession.sessionCreation.': 2,
-        'settingsSession.promptPersonalization.': 15,
         'commandPalette.commands.': 35,
         'releaseNotes.onboardingShowcase.': 0,
         'sessionsList.': 22,
     },
     'zh-Hans': {
-        'settingsAppearance.themeProfiles.': 106,
-        'settingsKeyboard.': 21,
         'settingsSession.sessionCreation.': 1,
-        'settingsSession.promptPersonalization.': 15,
         'commandPalette.commands.': 35,
         'releaseNotes.onboardingShowcase.': 0,
         'sessionsList.': 22,
     },
     'zh-Hant': {
-        'settingsAppearance.themeProfiles.': 106,
-        'settingsKeyboard.': 21,
         'settingsSession.sessionCreation.': 1,
-        'settingsSession.promptPersonalization.': 15,
         'commandPalette.commands.': 35,
         'releaseNotes.onboardingShowcase.': 0,
         'sessionsList.': 22,
     },
     ja: {
-        'settingsAppearance.themeProfiles.': 106,
-        'settingsKeyboard.': 21,
         'settingsSession.sessionCreation.': 1,
-        'settingsSession.promptPersonalization.': 15,
         'commandPalette.commands.': 35,
         'releaseNotes.onboardingShowcase.': 0,
         'sessionsList.': 22,
     },
     de: {
-        'settingsAppearance.themeProfiles.': 29,
-        'settingsKeyboard.': 1,
         'settingsSession.sessionCreation.': 2,
-        'settingsSession.promptPersonalization.': 0,
         'commandPalette.commands.': 6,
         'releaseNotes.onboardingShowcase.': 0,
         'sessionsList.': 1,
@@ -893,6 +885,14 @@ const FUNCTION_SAMPLE_ARGS_BY_KEY = new Map<string, unknown[]>([
     ['memorySearchSettings.queue.subtitle', [{ selected: 1, queued: 2, indexing: 3, indexed: 4, empty: 5, failed: 6, waiting: 7 }]],
     ['memorySearchSettings.queue.workerPhase', [{ phase: 'backfill' }]],
     ['memorySearchSettings.lastRun.subtitle', [{ considered: 2, processed: 3, semanticRows: 4, failures: 5 }]],
+    ['settingsKeyboard.conflictsTitle', [{ count: 1 }, { count: 2 }]],
+    ['settingsKeyboard.conflictsSubtitle', [{ count: 1 }, { count: 2 }]],
+    ['settingsKeyboard.setCommandAccessibility', [{ command: 'Open inbox' }]],
+    ['settingsKeyboard.setShortcutPromptTitle', [{ command: 'Open inbox' }]],
+    ['settingsKeyboard.resetCommandAccessibility', [{ command: 'Open inbox' }]],
+    ['settingsAppearance.themeProfiles.newProfileName', [{ count: 2 }]],
+    ['settingsAppearance.themeProfiles.importFooter', [{ formats: 'JSON' }]],
+    ['settingsAppearance.themeProfiles.importWarnings', [{ count: 1 }, { count: 2 }]],
 ]);
 
 const IGNORED_IDENTICAL_STRING_KEYS = new Set([

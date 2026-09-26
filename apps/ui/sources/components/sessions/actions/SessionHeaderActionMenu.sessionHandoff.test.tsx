@@ -775,6 +775,38 @@ describe('SessionHeaderActionMenu handoff', () => {
     expect(dropdown.props.items.some((item: any) => item?.id === SESSION_ACTION_STOP_ID)).toBe(false);
   });
 
+  it('labels protocol session actions with localized copy instead of the protocol English', async () => {
+    readMachineTargetForSessionMock.mockReturnValue({
+      machineId: 'machine_rebound',
+      basePath: '/workspace/repo',
+    });
+    const { recordCachedMachineRpcDirectRouteViable } = await import('@/sync/domains/transfers/runtime/transferRouteCache');
+    recordCachedMachineRpcDirectRouteViable({
+      serverId: 'server_a',
+      remoteMachineId: 'machine_rebound',
+    });
+
+    const { SessionHeaderActionMenu } = await import('./SessionHeaderActionMenu');
+
+    const screen = await renderScreen(<SessionHeaderActionMenu
+          sessionId="sess_1"
+          session={{
+            id: 'sess_1',
+            metadata: {
+              machineId: 'machine_source',
+              flavor: 'claude',
+            },
+          } as any}
+        />);
+
+    const items = screen.findByType('DropdownMenu' as any).props.items as Array<{ id: string; title: string; subtitle?: string }>;
+    const byId = new Map(items.map((item) => [item.id, item]));
+    expect(byId.get('session.handoff')).toMatchObject({
+      title: 'sessionInfo.handOffSession',
+      subtitle: 'sessionInfo.handOffSessionSubtitle',
+    });
+  });
+
   it('prefers the reachable source machine id for handoff gating and flow context when session metadata is stale', async () => {
     readMachineTargetForSessionMock.mockReturnValue({
       machineId: 'machine_rebound',

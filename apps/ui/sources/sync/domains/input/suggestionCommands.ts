@@ -10,6 +10,7 @@ import { isActionEnabledInState } from '@/sync/domains/settings/actionsSettings'
 import { BUILT_IN_PROMPTS } from './slashCommands/builtInPrompts';
 import type { PromptInvocationSuggestionMetadata } from './slashCommands/promptInvocationSuggestion';
 import { t } from '@/text';
+import { resolveActionSpecTitle } from '@/sync/domains/actions/actionSpecCopy';
 
 export interface CommandItem {
     command: string;        // The command without slash (e.g., "compact")
@@ -90,7 +91,7 @@ function buildActionSlashCommands(state: any): CommandItem[] {
             if (out.find((c) => c.command === command)) continue;
             out.push({
                 command,
-                description: describeActionSlashToken(token, spec.title),
+                description: describeActionSlashToken(token, resolveActionSpecTitle(spec)),
             });
         }
     }

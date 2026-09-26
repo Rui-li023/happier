@@ -4,6 +4,7 @@ import { getActionSpec, type ActionId } from '@happier-dev/protocol';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import { listAgentInputActionChipActionIds } from '@/components/sessions/agentInput/sessionActions/listAgentInputActionChipActionIds';
 import { createAgentInputActionShortcutChip } from '@/components/sessions/agentInput/sessionActions/createAgentInputActionShortcutChip';
+import { resolveActionSpecTitle } from '@/sync/domains/actions/actionSpecCopy';
 
 export function buildNewSessionActionShortcutChips(params: Readonly<{
     stateSnapshot: Readonly<{ settings?: unknown }>;
@@ -15,7 +16,7 @@ export function buildNewSessionActionShortcutChips(params: Readonly<{
         const spec = getActionSpec(actionId);
         return createAgentInputActionShortcutChip({
             key: `new-session-action:${actionId}`,
-            label: spec.title,
+            label: resolveActionSpecTitle(spec),
             onPress: () => params.onPressAction(actionId),
         }) satisfies AgentInputExtraActionChip;
     });
