@@ -64,10 +64,20 @@ type ProviderAccountUsagePersistencePayload = Readonly<{
   materialState: ProviderAccountUsagePersistenceMaterialState;
 }>;
 
+export type ProviderAccountUsageInBandSnapshotOptions = Readonly<{
+  source?: ConnectedServiceUsageSourceV1;
+  sources?: readonly ConnectedServiceUsageSourceV1[];
+  /**
+   * Called once when a write this call queued lands on the server. Not called when nothing was
+   * queued (`already_persisted`) or when the queued write fails or is dropped before it runs.
+   */
+  onPersisted?: () => void;
+}>;
+
 export type ProviderAccountUsagePersistenceScheduler = Readonly<{
   recordInBandSnapshot(
     snapshot: ProviderAccountUsageSnapshotV1,
-    options?: Readonly<{ source?: ConnectedServiceUsageSourceV1; sources?: readonly ConnectedServiceUsageSourceV1[] }>,
+    options?: ProviderAccountUsageInBandSnapshotOptions,
   ): Promise<
     | Readonly<{ status: 'enqueued'; enqueue: 'accepted' | 'coalesced' }>
     | Readonly<{ status: 'already_persisted'; reason: string }>
@@ -112,7 +122,7 @@ function sourcePersistenceKey(source: ConnectedServiceUsageSourceV1 | undefined)
 }
 
 function normalizePersistenceSources(
-  options: Readonly<{ source?: ConnectedServiceUsageSourceV1; sources?: readonly ConnectedServiceUsageSourceV1[] }> | undefined,
+  options: ProviderAccountUsageInBandSnapshotOptions | undefined,
 ): readonly (ConnectedServiceUsageSourceV1 | undefined)[] {
   const sources = [
     ...(options?.source ? [options.source] : []),
@@ -236,14 +246,36 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
     stateByPersistenceKey.set(_key, payload.materialState);
   }
 
+  // Confirmation callbacks of queued writes, released when the key's next write settles.
+  const persistedCallbacksByKey = new Map<string, Array<() => void>>();
+  function settlePersistedCallbacks(key: string, persisted: boolean): void {
+    const callbacks = persistedCallbacksByKey.get(key);
+    if (!callbacks) return;
+    persistedCallbacksByKey.delete(key);
+    if (!persisted) return;
+    for (const callback of callbacks) callback();
+  }
+
   const scheduler = createConnectedServiceQuotaPersistenceScheduler<string, ProviderAccountUsagePersistencePayload>({
-    run: persistPayload,
+    run: async (key, payload) => {
+      try {
+        await persistPayload(key, payload);
+      } catch (error) {
+        settlePersistedCallbacks(key, false);
+        throw error;
+      }
+      settlePersistedCallbacks(key, true);
+    },
     maxConcurrent: 2,
     minKeyIntervalMs: 0,
     maxKeys: 500,
     maxKeyAgeMs: 60 * 60_000,
     maxPendingPayloadAgeMs: 10 * 60_000,
     now: params.now,
+    // A pending write dropped before it ran (expired or evicted) will never confirm.
+    onEvent: (event) => {
+      if (event.type === 'suppressed') settlePersistedCallbacks(event.key, false);
+    },
   });
 
   return {
@@ -262,6 +294,14 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
       let accepted = false;
       let coalesced = false;
       let lastSuppressionReason = 'unchanged';
+      const onPersisted = options?.onPersisted;
+      let confirmed = false;
+      // One observation may queue a write per source; it is confirmed by the first that lands.
+      const confirmOnce = (): void => {
+        if (confirmed) return;
+        confirmed = true;
+        onPersisted?.();
+      };
       for (const source of normalizePersistenceSources(options)) {
         const persistenceKey = `${snapshot.recordId}\u0000${sourcePersistenceKey(source)}`;
         const decision = shouldPersistProviderAccountUsageSnapshot({
@@ -288,6 +328,12 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
         if (enqueue.type === 'suppressed') {
           throw new Error(`provider_account_usage_persistence_${enqueue.reason}`);
         }
+        if (onPersisted) {
+          persistedCallbacksByKey.set(persistenceKey, [
+            ...(persistedCallbacksByKey.get(persistenceKey) ?? []),
+            confirmOnce,
+          ]);
+        }
       }
       if (accepted || coalesced) {
         return { status: 'enqueued', enqueue: accepted ? 'accepted' : 'coalesced' };
@@ -295,6 +341,9 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
       return { status: 'already_persisted', reason: lastSuppressionReason };
     },
     flush: async (timeoutMs) => await scheduler.flushAll(timeoutMs),
-    dispose: () => scheduler.dispose(),
+    dispose: () => {
+      persistedCallbacksByKey.clear();
+      scheduler.dispose();
+    },
   };
 }

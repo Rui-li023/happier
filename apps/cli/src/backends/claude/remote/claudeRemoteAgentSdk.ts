@@ -195,7 +195,8 @@ export async function claudeRemoteAgentSdk(opts: {
     onCapabilities?: (caps: { slashCommands?: string[]; slashCommandDetails?: Array<{ command: string; description?: string }>; models?: unknown[] }) => void;
     onWorkStateSnapshot?: (snapshot: SessionWorkStateV1) => void | Promise<void>;
     onRateLimitEvent?: (details: NormalizedProviderUsageLimitDetailsV1) => void | Promise<void>;
-    onQuotaEvidence?: (details: NormalizedProviderUsageLimitDetailsV1) => void | Promise<void>;
+    /** Every quota window reported by one rate-limit event; they form one quota snapshot. */
+    onQuotaEvidence?: (windows: readonly NormalizedProviderUsageLimitDetailsV1[]) => void | Promise<void>;
     onRuntimeAuthFailureEvent?: (error: unknown) => void | Promise<void>;
     runtimeActivityAdapter?: ReturnType<typeof createClaudeProviderRuntimeActivityAdapter> | null;
     providerRuntimeActivityEvidence?: ClaudeRuntimeActivityEvidence | null;
@@ -1778,7 +1779,7 @@ export async function claudeRemoteAgentSdk(opts: {
                 return;
             } else {
                 const quotaEvidence = mapClaudeRateLimitEventToQuotaEvidence(message);
-                if (quotaEvidence) {
+                if (quotaEvidence.length > 0) {
                     await opts.onQuotaEvidence?.(quotaEvidence);
                 }
                 const rateLimitDetails = mapClaudeRateLimitEventToUsageDetails(message);

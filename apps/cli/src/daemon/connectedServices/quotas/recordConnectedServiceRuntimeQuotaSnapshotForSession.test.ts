@@ -788,7 +788,7 @@ describe('recordConnectedServiceRuntimeQuotaSnapshotForSession', () => {
     })).toBeNull();
     expect(accountUsage.persistence?.recordInBandSnapshot).toHaveBeenCalledWith(expect.objectContaining({
       accountSubject: { kind: 'providerSubject', id: 'acct_live_after_switch' },
-    }), undefined);
+    }), expect.not.objectContaining({ sources: expect.anything() }));
     expect(notifyAccountUsageChanged).not.toHaveBeenCalled();
   });
 

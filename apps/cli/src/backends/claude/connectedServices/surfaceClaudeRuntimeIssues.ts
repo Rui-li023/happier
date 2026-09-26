@@ -28,6 +28,7 @@ import { resolveConfiguredClaudeConfigDir } from '../utils/resolveConfiguredClau
 import { resolveClaudeRuntimeAuthRetryDecision } from './claudeRuntimeAuthRetryDecision';
 import { classifyClaudeConnectedServiceRuntimeAuthFailure } from './classifyClaudeConnectedServiceRuntimeAuthFailure';
 import type { NormalizedProviderUsageLimitDetailsV1 } from './mapClaudeRateLimitEventToUsageDetails';
+import { resolveClaudeUsageWindowLabel } from './quotaFetcher';
 import { resolveClaudeRuntimeProviderAccountIdentity } from './resolveClaudeRuntimeProviderAccountIdentity';
 
 type RuntimeIssueSession = Readonly<{
@@ -266,19 +267,62 @@ function buildNativeClaudeQuotaProfileId(): string {
     });
 }
 
+function resolveClaudeQuotaProviderLimitId(details: NormalizedProviderUsageLimitDetailsV1): string {
+    return details.providerLimitId ?? details.limitCategory ?? 'account';
+}
+
+function buildClaudeRuntimeQuotaMeter(
+    details: NormalizedProviderUsageLimitDetailsV1,
+    source: ClaudeQuotaSnapshotSource,
+): ConnectedServiceQuotaSnapshotV1['meters'][number] {
+    const providerLimitId = resolveClaudeQuotaProviderLimitId(details);
+    const resetAtMs = details.resetAtMs ?? details.overage?.resetAtMs ?? null;
+    const utilizationPct = details.utilization;
+    return {
+        meterId: providerLimitId,
+        label: resolveClaudeUsageWindowLabel(providerLimitId) ?? 'Usage limit',
+        used: null,
+        limit: null,
+        unit: 'unknown',
+        utilizationPct,
+        usedPct: utilizationPct,
+        remainingPct: utilizationPct === null ? null : Math.max(0, 100 - utilizationPct),
+        resetsAt: resetAtMs,
+        resetAtMs: resetAtMs,
+        resetSource: resetAtMs === null
+            ? 'unknown'
+            : source === 'in_band_provider_snapshot'
+                ? 'in_band_snapshot'
+                : 'provider_event',
+        status: 'ok',
+        source,
+        scope: 'unknown',
+        limitScope: details.quotaScope,
+        confidence: utilizationPct === null ? 'derived' : 'exact',
+        providerLimitId,
+        details: {
+            providerLimitId,
+            limitCategory: normalizeClaudePublicLimitCategory(details.limitCategory),
+        },
+    };
+}
+
+/**
+ * One quota snapshot per provider observation. Every window observed together must be in the same
+ * snapshot: the account-usage record it feeds is replaced wholesale, not merged per meter.
+ */
 function buildClaudeRuntimeQuotaSnapshot(params: Readonly<{
-    details: NormalizedProviderUsageLimitDetailsV1;
+    windows: readonly [NormalizedProviderUsageLimitDetailsV1, ...NormalizedProviderUsageLimitDetailsV1[]];
     fetchedAt: number;
     serviceId: RuntimeIssueConnectedService['serviceId'];
     profileId: string;
     source?: ClaudeQuotaSnapshotSource;
     evidenceKind?: ClaudeQuotaSnapshotEvidenceKind;
 }>): ConnectedServiceQuotaSnapshotV1 {
-    const providerLimitId = params.details.providerLimitId ?? params.details.limitCategory ?? 'account';
-    const resetAtMs = params.details.resetAtMs ?? params.details.overage?.resetAtMs ?? null;
-    const utilizationPct = params.details.utilization;
+    const [primaryWindow] = params.windows;
     const source = params.source ?? 'runtime_event';
     const evidenceKind = params.evidenceKind ?? 'claude_runtime_usage_limit';
+    const exact = params.windows.every((window) => window.utilization !== null);
     return {
         v: 1,
         serviceId: params.serviceId,
@@ -288,42 +332,16 @@ function buildClaudeRuntimeQuotaSnapshot(params: Readonly<{
         fetchedAtMs: params.fetchedAt,
         staleAfterMs: 300_000,
         staleAtMs: params.fetchedAt + 300_000,
-        planLabel: params.details.planType,
+        planLabel: primaryWindow.planType,
         accountLabel: null,
         source,
-        confidence: utilizationPct === null ? 'derived' : 'exact',
+        confidence: exact ? 'exact' : 'derived',
         evidence: {
             kind: evidenceKind,
-            providerLimitId,
+            providerLimitId: resolveClaudeQuotaProviderLimitId(primaryWindow),
             observedAtMs: params.fetchedAt,
         },
-        meters: [{
-            meterId: providerLimitId,
-            label: 'Usage limit',
-            used: null,
-            limit: null,
-            unit: 'unknown',
-            utilizationPct,
-            usedPct: utilizationPct,
-            remainingPct: utilizationPct === null ? null : Math.max(0, 100 - utilizationPct),
-            resetsAt: resetAtMs,
-            resetAtMs: resetAtMs,
-            resetSource: resetAtMs === null
-                ? 'unknown'
-                : source === 'in_band_provider_snapshot'
-                    ? 'in_band_snapshot'
-                    : 'provider_event',
-            status: 'ok',
-            source,
-            scope: 'unknown',
-            limitScope: params.details.quotaScope,
-            confidence: utilizationPct === null ? 'derived' : 'exact',
-            providerLimitId,
-            details: {
-                providerLimitId,
-                limitCategory: normalizeClaudePublicLimitCategory(params.details.limitCategory),
-            },
-        }],
+        meters: params.windows.map((window) => buildClaudeRuntimeQuotaMeter(window, source)),
     };
 }
 
@@ -355,22 +373,27 @@ function resolveClaudeQuotaSnapshotTarget(session: RuntimeIssueSession, input: R
 
 export async function recordClaudeRateLimitQuotaEvidence(
     session: RuntimeIssueSession,
-    details: NormalizedProviderUsageLimitDetailsV1,
+    windows: readonly NormalizedProviderUsageLimitDetailsV1[],
     logPrefix: string,
 ): Promise<void> {
     void logPrefix;
+    const [primaryWindow, ...otherWindows] = windows;
+    if (!primaryWindow) return;
     const target = resolveClaudeQuotaSnapshotTarget(session, {});
     if (!target.profileId) return;
-    const enrichedDetails = await enrichClaudeUsageDetailsWithRuntimeAccountIdentity(details);
+    // All windows come from one provider response, so one account identity covers them.
+    const enrichedPrimaryWindow = await enrichClaudeUsageDetailsWithRuntimeAccountIdentity(primaryWindow);
     const observedAt = Date.now();
     await claudeQuotaSnapshotDeliveryOutbox.enqueueAndFlush({
         sessionId: session.client.sessionId,
         serviceId: target.serviceId,
         ...(target.groupId ? { groupId: target.groupId } : {}),
         ...(target.groupGeneration !== null ? { groupGeneration: target.groupGeneration } : {}),
-        ...(enrichedDetails.sourceProviderAccountId !== undefined ? { sourceProviderAccountId: enrichedDetails.sourceProviderAccountId } : {}),
+        ...(enrichedPrimaryWindow.sourceProviderAccountId !== undefined
+            ? { sourceProviderAccountId: enrichedPrimaryWindow.sourceProviderAccountId }
+            : {}),
         snapshot: buildClaudeRuntimeQuotaSnapshot({
-            details: enrichedDetails,
+            windows: [enrichedPrimaryWindow, ...otherWindows],
             fetchedAt: observedAt,
             serviceId: target.serviceId,
             profileId: target.profileId,
@@ -516,7 +539,7 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
             ...(effectiveGroupGeneration !== null ? { groupGeneration: effectiveGroupGeneration } : {}),
             ...(enrichedDetails.sourceProviderAccountId !== undefined ? { sourceProviderAccountId: enrichedDetails.sourceProviderAccountId } : {}),
             snapshot: buildClaudeRuntimeQuotaSnapshot({
-                details: enrichedDetails,
+                windows: [enrichedDetails],
                 fetchedAt: occurredAt,
                 serviceId: connectedServiceId,
                 profileId,

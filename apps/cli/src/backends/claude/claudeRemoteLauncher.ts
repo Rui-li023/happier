@@ -1275,8 +1275,8 @@ export async function claudeRemoteLauncher(
             recordPrimaryProviderUnavailableForPromptDelivery(details);
             await surfaceClaudeRateLimitRuntimeIssue(session, details, '[remote]');
         };
-        const recordRemoteQuotaEvidence = async (details: NormalizedProviderUsageLimitDetailsV1): Promise<void> => {
-            await recordClaudeRateLimitQuotaEvidence(session, details, '[remote]');
+        const recordRemoteQuotaEvidence = async (windows: readonly NormalizedProviderUsageLimitDetailsV1[]): Promise<void> => {
+            await recordClaudeRateLimitQuotaEvidence(session, windows, '[remote]');
         };
         // Initial goal (P1-E4): consumed once from the daemon-provided env so the FIRST unified
         // launch injects `/goal <objective>`; a park/respawn relaunch must not re-inject it.
@@ -1743,8 +1743,8 @@ export async function claudeRemoteLauncher(
                     onRateLimitEvent: async (details: NormalizedProviderUsageLimitDetailsV1) => {
                         await surfaceRemoteRateLimitRuntimeIssue(details);
                     },
-                    onQuotaEvidence: async (details: NormalizedProviderUsageLimitDetailsV1) => {
-                        await recordRemoteQuotaEvidence(details);
+                    onQuotaEvidence: async (windows: readonly NormalizedProviderUsageLimitDetailsV1[]) => {
+                        await recordRemoteQuotaEvidence(windows);
                     },
                     // Unified terminal usage-limit evidence is detected by the hook lifecycle
                     // bridge and surfaced through onUsageLimitDetails (the legacy/agent-SDK

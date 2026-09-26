@@ -177,7 +177,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
           sessionId: 'sess_claude_passive_quota',
           sessionTurnLifecycle: { failTurn },
         },
-      } as any, {
+      } as any, [{
         v: 1,
         resetAtMs: 1_779_097_200_000,
         retryAfterMs: null,
@@ -189,7 +189,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
         overage: null,
         action: null,
         connectedService: null,
-      }, '[claude-test]');
+      }], '[claude-test]');
 
       expect(failTurn).not.toHaveBeenCalled();
       expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).not.toHaveBeenCalled();
@@ -221,6 +221,55 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     }
   });
 
+  it('records every passive Claude quota window as a labelled meter of one snapshot', async () => {
+    const previousSelectionEnv = installClaudeSelectionEnv();
+    const passiveWindow = {
+      v: 1 as const,
+      retryAfterMs: null,
+      quotaScope: 'account' as const,
+      recoverability: 'wait' as const,
+      planType: null,
+      overage: null,
+      action: null,
+      connectedService: null,
+    };
+    try {
+      await recordClaudeRateLimitQuotaEvidence({
+        client: { sessionId: 'sess_claude_passive_windows' },
+      } as any, [
+        { ...passiveWindow, providerLimitId: 'five_hour', utilization: 5, resetAtMs: 1_790_378_400_000 },
+        { ...passiveWindow, providerLimitId: 'seven_day', utilization: 7, resetAtMs: 1_790_928_000_000 },
+      ], '[claude-test]');
+
+      // The account-usage store replaces a record wholesale, so both windows must travel together.
+      expect(mockNotifyDaemonConnectedServiceQuotaSnapshot).toHaveBeenCalledTimes(1);
+      expect(mockNotifyDaemonConnectedServiceQuotaSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'sess_claude_passive_windows',
+        snapshot: expect.objectContaining({
+          confidence: 'exact',
+          meters: [
+            expect.objectContaining({
+              meterId: 'five_hour',
+              label: '5-hour',
+              utilizationPct: 5,
+              remainingPct: 95,
+              resetAtMs: 1_790_378_400_000,
+            }),
+            expect.objectContaining({
+              meterId: 'seven_day',
+              label: 'Weekly',
+              utilizationPct: 7,
+              remainingPct: 93,
+              resetAtMs: 1_790_928_000_000,
+            }),
+          ],
+        }),
+      }));
+    } finally {
+      restoreClaudeSelectionEnv(previousSelectionEnv);
+    }
+  });
+
   it('threads source provider account identity into passive Claude quota evidence delivery', async () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     const failTurn = createClaudeFailTurnSpy();
@@ -230,7 +279,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
           sessionId: 'sess_claude_passive_identity',
           sessionTurnLifecycle: { failTurn },
         },
-      } as any, {
+      } as any, [{
         v: 1,
         resetAtMs: 1_779_097_200_000,
         retryAfterMs: null,
@@ -243,7 +292,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
         action: null,
         connectedService: null,
         sourceProviderAccountId: 'acct_claude_live',
-      }, '[claude-test]');
+      }], '[claude-test]');
 
       expect(failTurn).not.toHaveBeenCalled();
       expect(mockNotifyDaemonConnectedServiceQuotaSnapshot).toHaveBeenCalledWith(expect.objectContaining({
@@ -1181,7 +1230,7 @@ describe('R3-4: Claude in-band evidence becomes source-backed → predictive sof
 
     await recordClaudeRateLimitQuotaEvidence({
       client: { sessionId: 'sess_r34_passive' },
-    } as any, passiveUtilizationDetails(), '[r34-test]');
+    } as any, [passiveUtilizationDetails()], '[r34-test]');
 
     const call = deliveredQuotaCall();
     // 1. Real provider-account identity resolved from the materialized config and stamped.
@@ -1233,7 +1282,7 @@ describe('R3-4: Claude in-band evidence becomes source-backed → predictive sof
 
     await recordClaudeRateLimitQuotaEvidence({
       client: { sessionId: 'sess_r34_unproven' },
-    } as any, passiveUtilizationDetails(), '[r34-test]');
+    } as any, [passiveUtilizationDetails()], '[r34-test]');
 
     const call = deliveredQuotaCall();
     expect(call.sourceProviderAccountId).toBeUndefined();
@@ -1253,10 +1302,10 @@ describe('R3-4: Claude in-band evidence becomes source-backed → predictive sof
 
     await recordClaudeRateLimitQuotaEvidence({
       client: { sessionId: 'sess_r34_preset' },
-    } as any, {
+    } as any, [{
       ...passiveUtilizationDetails(),
       sourceProviderAccountId: 'acct_supplied',
-    }, '[r34-test]');
+    }], '[r34-test]');
 
     expect(deliveredQuotaCall().sourceProviderAccountId).toBe('acct_supplied');
   });

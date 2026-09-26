@@ -520,27 +520,66 @@ export function mapClaudeRateLimitEventToUsageDetails(event: unknown): Normalize
   });
 }
 
-export function mapClaudeRateLimitEventToQuotaEvidence(event: unknown): NormalizedProviderUsageLimitDetailsV1 | null {
-  const record = isRecord(event) ? event : null;
-  if (record?.type !== 'rate_limit_event') return null;
-  const info = isRecord(record.rate_limit_info) ? record.rate_limit_info : null;
-  if (!info) return null;
-  const status = readString(info.status);
-  if (status !== 'allowed' && status !== 'allowed_warning') return null;
-  const utilization = readUtilizationPercent(info.utilization);
-  if (utilization === null) return null;
-  const rateLimitType = readString(info.rateLimitType ?? info.rate_limit_type);
+/**
+ * Claude reports a unified window's usage as the fraction of the window used — 0-1, above 1 once
+ * usage runs past the cap. Rounded to one decimal percent, as Claude's own statusline does.
+ */
+function readUnifiedWindowUsedPercent(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(100, Math.round(value * 1000) / 10));
+}
+
+function buildPassiveQuotaEvidence(input: Readonly<{
+  providerLimitId: string | null;
+  utilization: number;
+  resetAtMs: number | null;
+}>): NormalizedProviderUsageLimitDetailsV1 {
   return {
     v: 1,
-    resetAtMs: readTimestampMs(info.resetsAt ?? info.resets_at),
+    resetAtMs: input.resetAtMs,
     retryAfterMs: null,
     quotaScope: 'account',
     recoverability: 'wait',
-    ...(rateLimitType ? { providerLimitId: rateLimitType } : {}),
+    ...(input.providerLimitId ? { providerLimitId: input.providerLimitId } : {}),
     planType: null,
-    utilization,
+    utilization: input.utilization,
     overage: null,
     action: null,
     connectedService: null,
   };
+}
+
+/**
+ * Passive quota evidence from an allowed Claude `rate_limit_event`, one entry per window. Current
+ * Claude Code reports every window under `rate_limit_info.unifiedWindows` and leaves the top-level
+ * `utilization` unset; older builds only carry the surfaced window's top-level `utilization`.
+ */
+export function mapClaudeRateLimitEventToQuotaEvidence(event: unknown): readonly NormalizedProviderUsageLimitDetailsV1[] {
+  const record = isRecord(event) ? event : null;
+  if (record?.type !== 'rate_limit_event') return [];
+  const info = isRecord(record.rate_limit_info) ? record.rate_limit_info : null;
+  if (!info) return [];
+  const status = readString(info.status);
+  if (status !== 'allowed' && status !== 'allowed_warning') return [];
+
+  const unifiedWindows = isRecord(info.unifiedWindows) ? info.unifiedWindows : {};
+  const windowEvidence = Object.entries(unifiedWindows).flatMap(([windowId, window]) => {
+    if (!isRecord(window)) return [];
+    const utilization = readUnifiedWindowUsedPercent(window.utilization);
+    if (utilization === null) return [];
+    return [buildPassiveQuotaEvidence({
+      providerLimitId: windowId,
+      utilization,
+      resetAtMs: readTimestampMs(window.resetsAt),
+    })];
+  });
+  if (windowEvidence.length > 0) return windowEvidence;
+
+  const utilization = readUtilizationPercent(info.utilization);
+  if (utilization === null) return [];
+  return [buildPassiveQuotaEvidence({
+    providerLimitId: readString(info.rateLimitType ?? info.rate_limit_type),
+    utilization,
+    resetAtMs: readTimestampMs(info.resetsAt ?? info.resets_at),
+  })];
 }

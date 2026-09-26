@@ -112,7 +112,7 @@ describe('provider account usage source-link proof invariant guard', () => {
     expect(latestObservation).toBeUndefined();
     expect(recordInBandSnapshot).toHaveBeenCalledWith(expect.objectContaining({
       recordId: snapshot.recordId,
-    }), undefined);
+    }), expect.not.objectContaining({ sources: expect.anything() }));
   });
 
   it('threads proven Claude and Codex passive source identities into quota evidence delivery', async () => {
@@ -124,7 +124,7 @@ describe('provider account usage source-link proof invariant guard', () => {
           sessionId: 'sess_claude_source_link_guard',
         },
       };
-      await recordClaudeRateLimitQuotaEvidence(claudeSession, {
+      await recordClaudeRateLimitQuotaEvidence(claudeSession, [{
         v: 1,
         resetAtMs: 1_779_097_200_000,
         retryAfterMs: null,
@@ -137,7 +137,7 @@ describe('provider account usage source-link proof invariant guard', () => {
         action: null,
         connectedService: null,
         sourceProviderAccountId: 'acct_claude_proven',
-      }, '[source-link-guard]');
+      }], '[source-link-guard]');
 
       expect(mockNotifyDaemonConnectedServiceQuotaSnapshot).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: 'sess_claude_source_link_guard',
